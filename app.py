@@ -18,7 +18,7 @@ from supabase import Client, create_client
 
 st.set_page_config(
     page_title="DAILYLOOK.SM | ปฏิทินงานทีม",
-    page_icon="🌸",
+    page_icon="📅",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -68,30 +68,42 @@ def inject_css() -> None:
         html, body, [class*="css"], .stApp, button, input, textarea, select {
             font-family: "Mali", "Noto Sans Thai", sans-serif !important;
         }
-        .stApp { background: linear-gradient(145deg, #fff9fc 0%, #f8eef5 54%, #f3edf8 100%); }
-        h1, h2, h3 { color: #593f50; letter-spacing: -0.02em; }
+        :root {
+            --cream: #f7f3ed;
+            --paper: #fffdf9;
+            --sidebar: #eaf3f5;
+            --brown: #4b382b;
+            --brown-soft: #9d7454;
+            --blue: #7f9eaa;
+            --blue-soft: #e5f0f2;
+            --line: #e5dbcf;
+            --muted: #8c8378;
+        }
+        .stApp { background: #f7f3ed; color: var(--brown); }
+        h1, h2, h3 { color: var(--brown); letter-spacing: -0.02em; }
+        p, label, [data-testid="stCaptionContainer"] { color: var(--muted); }
         .block-container { padding-top: 1.6rem; max-width: 1500px; }
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #fff7fb 0%, #f7edf5 100%);
-            border-right: 1px solid #ead5e2;
+            background: var(--sidebar);
+            border-right: 1px solid #d7e3e5;
         }
         [data-testid="stMetric"] {
-            background: rgba(255,255,255,.82);
-            border: 1px solid #ead5e2;
-            border-radius: 20px;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 18px;
             padding: 14px 18px;
-            box-shadow: 0 8px 28px rgba(91, 58, 78, .07);
+            box-shadow: 0 8px 24px rgba(75, 56, 43, .05);
         }
         .calendar-cell {
             min-height: 138px;
-            background: rgba(255,255,255,.88);
-            border: 1px solid #ead5e2;
-            border-radius: 18px;
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-radius: 0;
             padding: 10px;
             margin-bottom: 10px;
             overflow: hidden;
         }
-        .calendar-cell.today { border: 2px solid #d789ad; background: #fff5fa; }
+        .calendar-cell.today { border: 2px solid #9bb9c2; background: var(--blue-soft); }
         .calendar-cell.outside { opacity: .44; }
         .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; }
         .event-chip {
@@ -99,47 +111,62 @@ def inject_css() -> None:
             border-radius: 10px;
             padding: 5px 7px;
             margin: 4px 0;
-            color: #243234;
+            color: var(--brown);
             font-size: .78rem;
             line-height: 1.25;
             overflow: hidden;
         }
         .timeline-card {
-            background: rgba(255,255,255,.9);
-            border: 1px solid #ead5e2;
+            background: var(--paper);
+            border: 1px solid var(--line);
             border-radius: 18px;
             padding: 16px 18px;
             margin: 9px 0 15px;
         }
-        .muted { color:#718080; font-size:.9rem; }
+        .muted { color:var(--muted); font-size:.9rem; }
         .info-badge {
             display:inline-block;
-            background:#fff0d8;
+            background:#f1e8dc;
             border-radius:999px;
             padding:3px 10px;
             font-size:.78rem;
         }
         div[data-testid="stForm"] {
-            background: rgba(255,255,255,.7);
+            background: var(--paper);
+            border: 1px solid var(--line);
             border-radius: 20px;
             padding: 14px;
         }
         .month-title {
             text-align:center;
-            color:#68475a;
+            color:var(--brown);
             font-size:1.45rem;
             font-weight:700;
             padding-top:.2rem;
         }
         .brand-kicker {
-            color:#b66f93;
+            color:var(--blue);
             font-size:.82rem;
             font-weight:700;
             letter-spacing:.13em;
         }
         div.stButton > button[kind="primary"] {
-            background:#c87b9f;
-            border-color:#c87b9f;
+            background:var(--brown-soft);
+            border-color:var(--brown-soft);
+            color:#fff;
+        }
+        div.stButton > button {
+            border-color:var(--line);
+            color:var(--brown);
+            border-radius:10px;
+        }
+        [data-baseweb="tab-list"] button[aria-selected="true"] {
+            color:var(--brown);
+            border-bottom-color:var(--brown-soft);
+        }
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong,
+        [data-testid="stSidebar"] h3 {
+            color:var(--brown);
         }
         @media (max-width: 700px) {
             .block-container { padding: 1rem .7rem; }
@@ -188,7 +215,7 @@ def actor_name() -> str:
 
 def login_screen(sb: Client) -> None:
     st.markdown('<div class="brand-kicker">DAILYLOOK.SM</div>', unsafe_allow_html=True)
-    st.title("🌸 ปฏิทินงานทีม")
+    st.title("ปฏิทินงานทีม")
     st.subheader("จัดการงานของทีมในที่เดียว")
     login_tab, signup_tab = st.tabs(["เข้าสู่ระบบ", "สร้างบัญชี"])
     with login_tab:
@@ -955,7 +982,7 @@ def sidebar_editor(
 def main() -> None:
     inject_css()
     if not supabase_ready():
-        st.title("🌸 DAILYLOOK.SM")
+        st.title("DAILYLOOK.SM")
         st.warning("ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
         st.markdown(
             """
