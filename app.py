@@ -17,8 +17,8 @@ from supabase import Client, create_client
 
 
 st.set_page_config(
-    page_title="PHONGPAT M. | ปฏิทินงานทีม",
-    page_icon="📅",
+    page_title="DAILYLOOK.SM | ปฏิทินงานทีม",
+    page_icon="🌸",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -68,26 +68,30 @@ def inject_css() -> None:
         html, body, [class*="css"], .stApp, button, input, textarea, select {
             font-family: "Mali", "Noto Sans Thai", sans-serif !important;
         }
-        .stApp { background: linear-gradient(145deg, #fffdf8 0%, #f7f0e7 100%); }
-        h1, h2, h3 { letter-spacing: -0.02em; }
+        .stApp { background: linear-gradient(145deg, #fff9fc 0%, #f8eef5 54%, #f3edf8 100%); }
+        h1, h2, h3 { color: #593f50; letter-spacing: -0.02em; }
         .block-container { padding-top: 1.6rem; max-width: 1500px; }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #fff7fb 0%, #f7edf5 100%);
+            border-right: 1px solid #ead5e2;
+        }
         [data-testid="stMetric"] {
             background: rgba(255,255,255,.82);
-            border: 1px solid #e7d9c9;
+            border: 1px solid #ead5e2;
             border-radius: 20px;
             padding: 14px 18px;
-            box-shadow: 0 8px 28px rgba(73, 64, 53, .06);
+            box-shadow: 0 8px 28px rgba(91, 58, 78, .07);
         }
         .calendar-cell {
             min-height: 138px;
             background: rgba(255,255,255,.88);
-            border: 1px solid #eadfd2;
+            border: 1px solid #ead5e2;
             border-radius: 18px;
             padding: 10px;
             margin-bottom: 10px;
             overflow: hidden;
         }
-        .calendar-cell.today { border: 2px solid #7fa9b8; background: #f5fbfc; }
+        .calendar-cell.today { border: 2px solid #d789ad; background: #fff5fa; }
         .calendar-cell.outside { opacity: .44; }
         .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; }
         .event-chip {
@@ -102,7 +106,7 @@ def inject_css() -> None:
         }
         .timeline-card {
             background: rgba(255,255,255,.9);
-            border: 1px solid #eadfd2;
+            border: 1px solid #ead5e2;
             border-radius: 18px;
             padding: 16px 18px;
             margin: 9px 0 15px;
@@ -119,6 +123,23 @@ def inject_css() -> None:
             background: rgba(255,255,255,.7);
             border-radius: 20px;
             padding: 14px;
+        }
+        .month-title {
+            text-align:center;
+            color:#68475a;
+            font-size:1.45rem;
+            font-weight:700;
+            padding-top:.2rem;
+        }
+        .brand-kicker {
+            color:#b66f93;
+            font-size:.82rem;
+            font-weight:700;
+            letter-spacing:.13em;
+        }
+        div.stButton > button[kind="primary"] {
+            background:#c87b9f;
+            border-color:#c87b9f;
         }
         @media (max-width: 700px) {
             .block-container { padding: 1rem .7rem; }
@@ -166,8 +187,9 @@ def actor_name() -> str:
 
 
 def login_screen(sb: Client) -> None:
-    st.title("📅 PHONGPAT M.")
-    st.subheader("ปฏิทินงานทีม dailylook.sm")
+    st.markdown('<div class="brand-kicker">DAILYLOOK.SM</div>', unsafe_allow_html=True)
+    st.title("🌸 ปฏิทินงานทีม")
+    st.subheader("จัดการงานของทีมในที่เดียว")
     login_tab, signup_tab = st.tabs(["เข้าสู่ระบบ", "สร้างบัญชี"])
     with login_tab:
         with st.form("login"):
@@ -454,17 +476,58 @@ def event_form(
                 st.error(f"บันทึกไม่สำเร็จ: {exc}")
 
 
+def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    month_index = year * 12 + month - 1 + delta
+    return month_index // 12, month_index % 12 + 1
+
+
 def calendar_view(events: list[dict[str, Any]]) -> None:
     today = date.today()
-    nav1, nav2 = st.columns([1, 2])
-    year = nav1.number_input("ปี ค.ศ.", min_value=2025, max_value=2100, value=today.year)
-    month = nav2.selectbox(
-        "เดือน",
-        range(1, 13),
-        format_func=lambda number: MONTHS_TH[number],
-        index=today.month - 1,
+    if "calendar_year" not in st.session_state:
+        st.session_state.calendar_year = today.year
+    if "calendar_month" not in st.session_state:
+        st.session_state.calendar_month = today.month
+
+    year = int(st.session_state.calendar_year)
+    month = int(st.session_state.calendar_month)
+    previous_col, title_col, next_col, today_col = st.columns([1, 3, 1, 1.5])
+    if previous_col.button("◀", key="previous_month", use_container_width=True):
+        year, month = shift_month(year, month, -1)
+        st.session_state.calendar_year = year
+        st.session_state.calendar_month = month
+        st.rerun()
+    title_col.markdown(
+        f'<div class="month-title">{MONTHS_TH[month]} {year + 543}</div>',
+        unsafe_allow_html=True,
     )
-    st.subheader(f"{MONTHS_TH[month]} {year + 543}")
+    if next_col.button("▶", key="next_month", use_container_width=True):
+        year, month = shift_month(year, month, 1)
+        st.session_state.calendar_year = year
+        st.session_state.calendar_month = month
+        st.rerun()
+    if today_col.button(
+        "เดือนนี้",
+        key="current_month",
+        use_container_width=True,
+        disabled=(year == today.year and month == today.month),
+    ):
+        st.session_state.calendar_year = today.year
+        st.session_state.calendar_month = today.month
+        st.rerun()
+
+    with st.expander("เลือกเดือน"):
+        month_rows = [st.columns(4) for _ in range(3)]
+        for number in range(1, 13):
+            row, col = divmod(number - 1, 4)
+            if month_rows[row][col].button(
+                MONTHS_TH[number],
+                key=f"choose_month_{number}",
+                use_container_width=True,
+                type="primary" if number == month else "secondary",
+            ):
+                st.session_state.calendar_month = number
+                st.rerun()
+
     header_cols = st.columns(7)
     for col, label in zip(
         header_cols, ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]
@@ -752,7 +815,7 @@ def export_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def export_markdown(events: list[dict[str, Any]]) -> str:
     lines = [
-        "# กำหนดการของ PHONGPAT M.",
+        "# กำหนดการของ DAILYLOOK.SM",
         "",
         f"ส่งออกเมื่อ {date.today().strftime('%d/%m/%Y')}",
         "",
@@ -802,21 +865,21 @@ def backup_view(events: list[dict[str, Any]]) -> None:
     col1.download_button(
         "ดาวน์โหลด JSON",
         json_data.encode("utf-8"),
-        file_name=f"phongpat-calendar-{date.today().isoformat()}.json",
+        file_name=f"dailylook-sm-calendar-{date.today().isoformat()}.json",
         mime="application/json",
         use_container_width=True,
     )
     col2.download_button(
         "ดาวน์โหลด CSV",
         ("\ufeff" + csv_buffer.getvalue()).encode("utf-8"),
-        file_name=f"phongpat-calendar-{date.today().isoformat()}.csv",
+        file_name=f"dailylook-sm-calendar-{date.today().isoformat()}.csv",
         mime="text/csv",
         use_container_width=True,
     )
     col3.download_button(
         "ดาวน์โหลด Markdown",
         markdown_data.encode("utf-8"),
-        file_name=f"phongpat-calendar-{date.today().isoformat()}.md",
+        file_name=f"dailylook-sm-calendar-{date.today().isoformat()}.md",
         mime="text/markdown",
         use_container_width=True,
     )
@@ -825,8 +888,33 @@ def backup_view(events: list[dict[str, Any]]) -> None:
 def sidebar_editor(
     sb: Client, events: list[dict[str, Any]], people: list[dict[str, Any]], role: str
 ) -> None:
+    st.sidebar.markdown(
+        '<div class="brand-kicker">DAILYLOOK.SM</div>',
+        unsafe_allow_html=True,
+    )
     st.sidebar.markdown(f"### สวัสดี {actor_name()}")
     st.sidebar.caption("ผู้ดูแล" if role == "admin" else "สมาชิก")
+    with st.sidebar.expander("โปรไฟล์ของฉัน"):
+        with st.form("profile_form"):
+            display_name = st.text_input(
+                "ชื่อที่แสดง",
+                value=actor_name(),
+                max_chars=60,
+            )
+            if st.form_submit_button("บันทึกชื่อ", use_container_width=True):
+                clean_name = display_name.strip()
+                if not clean_name:
+                    st.error("กรุณาใส่ชื่อที่ต้องการแสดง")
+                else:
+                    try:
+                        sb.table("profiles").update(
+                            {"display_name": clean_name}
+                        ).eq("id", current_user().id).execute()
+                        st.session_state.display_name = clean_name
+                        st.success("บันทึกชื่อแล้ว")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"บันทึกชื่อไม่สำเร็จ: {exc}")
     if st.sidebar.button("ออกจากระบบ", use_container_width=True):
         sb.auth.sign_out()
         st.session_state.clear()
@@ -867,7 +955,7 @@ def sidebar_editor(
 def main() -> None:
     inject_css()
     if not supabase_ready():
-        st.title("📅 PHONGPAT M.")
+        st.title("🌸 DAILYLOOK.SM")
         st.warning("ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
         st.markdown(
             """
@@ -908,8 +996,9 @@ def main() -> None:
         return
 
     sidebar_editor(sb, events, people, profile.get("role", "member"))
-    st.title("PHONGPAT M.")
-    st.caption("ปฏิทินงานทีม dailylook.sm • ทุกคนเห็นข้อมูลชุดเดียวกัน")
+    st.markdown('<div class="brand-kicker">TEAM CALENDAR</div>', unsafe_allow_html=True)
+    st.title("DAILYLOOK.SM")
+    st.caption("ปฏิทินงานทีม • ทุกคนเห็นข้อมูลชุดเดียวกัน")
 
     today = date.today()
     real_tasks = [event for event in events if event["item_type"] == "task"]
