@@ -196,13 +196,24 @@ def supabase_ready() -> bool:
 
 
 def get_supabase() -> Client:
-    # Supabase's auth session lives on the client. Keeping the client in
-    # st.session_state prevents one browser session from sharing auth state
-    # with another user.
+    """สร้าง Supabase client พร้อม timeout configuration"""
     if "supabase_client" not in st.session_state:
-        st.session_state.supabase_client = create_client(
-            secret("SUPABASE_URL"), secret("SUPABASE_ANON_KEY")
-        )
+        try:
+            url = secret("SUPABASE_URL")
+            key = secret("SUPABASE_ANON_KEY")
+            
+            if not url or not key:
+                raise ValueError("ตั้งค่า SUPABASE_URL และ SUPABASE_ANON_KEY ไม่ครบ")
+            
+            import httpx
+            client_options = {
+                "timeout": httpx.Timeout(30.0, connect=10.0)
+            }
+            st.session_state.supabase_client = create_client(url, key)
+        except Exception as e:
+            st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase: {str(e)}")
+            st.stop()
+    
     return st.session_state.supabase_client
 
 
@@ -224,15 +235,26 @@ def login_screen(sb: Client) -> None:
             email = st.text_input("อีเมล")
             password = st.text_input("รหัสผ่าน", type="password")
             if st.form_submit_button("เข้าสู่ระบบ", use_container_width=True):
+                if not email or not password:
+                    st.error("กรุณาใส่อีเมลและรหัสผ่าน")
+                    return
                 try:
-                    result = sb.auth.sign_in_with_password(
-                        {"email": email.strip(), "password": password}
-                    )
+                    with st.spinner("กำลังตรวจสอบ..."):
+                        result = sb.auth.sign_in_with_password(
+                            {"email": email.strip(), "password": password}
+                        )
                     st.session_state.user = result.user
                     st.session_state.access_token = result.session.access_token
+                    st.success("เข้าสู่ระบบสำเร็จ ✅")
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"เข้าสู่ระบบไม่สำเร็จ: {exc}")
+                    error_msg = str(exc)
+                    if "timeout" in error_msg.lower():
+                        st.error("⏱️ การเชื่อมต่อหมดเวลา กรุณาลองใหม่")
+                    elif "invalid" in error_msg.lower():
+                        st.error("❌ อีเมลหรือรหัสผ่านไม่ถูกต้อง")
+                    else:
+                        st.error(f"❌ เข้าสู่ระบบไม่สำเร็จ: {exc}")
     with signup_tab:
         st.caption("สมาชิกใหม่อาจต้องยืนยันอีเมลก่อนเข้าสู่ระบบ")
         with st.form("signup"):
@@ -250,14 +272,15 @@ def login_screen(sb: Client) -> None:
                     st.error("Secret Key ของทีมไม่ถูกต้อง")
                     return
                 try:
-                    sb.auth.sign_up(
-                        {
-                            "email": email.strip(),
-                            "password": password,
-                            "options": {"data": {"display_name": name.strip()}},
-                        }
-                    )
-                    st.success("สร้างบัญชีแล้ว กรุณาตรวจอีเมลเพื่อยืนยันบัญชี")
+                    with st.spinner("กำลังสร้างบัญชี..."):
+                        sb.auth.sign_up(
+                            {
+                                "email": email.strip(),
+                                "password": password,
+                                "options": {"data": {"display_name": name.strip()}},
+                            }
+                        )
+                    st.success("สร้างบัญชีแล้ว ✅ กรุณาตรวจอีเมลเพื่อยืนยันบัญชี")
                 except Exception as exc:
                     st.error(f"สร้างบัญชีไม่สำเร็จ: {exc}")
 
@@ -984,7 +1007,7 @@ def main() -> None:
     inject_css()
     if not supabase_ready():
         st.title("DAILYLOOK.SM")
-        st.warning("ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
+        st.warning("⚠️ ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
         st.markdown(
             """
             ตั้งค่าให้พร้อมใช้งานโดย:
@@ -1017,9 +1040,13 @@ def main() -> None:
         people = load_people(sb)
         profiles = load_profiles(sb)
         events = load_events(sb)
-    except Exception:
+    except Exception as exc:
         st.session_state.clear()
-        st.error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่")
+        error_msg = str(exc)
+        if "timeout" in error_msg.lower():
+            st.error("⏱️ การเชื่อมต่อหมดเวลา กรุณาลองใหม่")
+        else:
+            st.error(f"❌ เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่: {exc}")
         st.rerun()
         return
 
