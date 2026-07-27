@@ -152,8 +152,8 @@ def inject_css() -> None:
             letter-spacing:.13em;
         }
         div.stButton > button[kind="primary"] {
-            background:var(--brown-soft);
-            border-color:var(--brown-soft);
+            background:#8DAA91;
+            border-color:#8DAA91;
             color:#fff;
         }
         div.stButton > button {
@@ -163,7 +163,7 @@ def inject_css() -> None:
         }
         [data-baseweb="tab-list"] button[aria-selected="true"] {
             color:var(--brown);
-            border-bottom-color:var(--brown-soft);
+            border-bottom-color:#8DAA91;
         }
         [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong,
         [data-testid="stSidebar"] h3 {
