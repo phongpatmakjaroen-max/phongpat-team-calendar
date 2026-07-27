@@ -1,4 +1,4 @@
-# PHONGPAT M. Team Calendar
+# DAILYLOOK.SM Team Calendar
 
 ปฏิทินงานทีมสำหรับ dailylook.sm สร้างด้วย Streamlit และ Supabase ทุกคนที่เข้าสู่ระบบจะเห็นข้อมูลชุดเดียวกัน
 
