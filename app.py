@@ -68,78 +68,78 @@ def inject_css() -> None:
         html, body, [class*="css"], .stApp, button, input, textarea, select {
             font-family: "Mali", "Noto Sans Thai", sans-serif !important;
         }
-        .stApp { background: linear-gradient(145deg, #fff9fc 0%, #f8eef5 54%, #f3edf8 100%); }
-        h1, h2, h3 { color: #593f50; letter-spacing: -0.02em; }
+        .stApp { background: linear-gradient(145deg, #f0e8f5 0%, #f5f0eb 54%, #faf8f3 100%); }
+        h1, h2, h3 { color: #6b5b7a; letter-spacing: -0.02em; }
         .block-container { padding-top: 1.6rem; max-width: 1500px; }
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #fff7fb 0%, #f7edf5 100%);
-            border-right: 1px solid #ead5e2;
+            background: linear-gradient(180deg, #f5eff5 0%, #faf5f0 100%);
+            border-right: 1px solid #e8dde8;
         }
         [data-testid="stMetric"] {
-            background: rgba(255,255,255,.82);
-            border: 1px solid #ead5e2;
+            background: rgba(255,255,255,.85);
+            border: 1px solid #ddd2d8;
             border-radius: 20px;
             padding: 14px 18px;
-            box-shadow: 0 8px 28px rgba(91, 58, 78, .07);
+            box-shadow: 0 8px 28px rgba(107, 91, 122, .06);
         }
         .calendar-cell {
             min-height: 138px;
-            background: rgba(255,255,255,.88);
-            border: 1px solid #ead5e2;
+            background: rgba(255,255,255,.9);
+            border: 1px solid #ddd2d8;
             border-radius: 18px;
             padding: 10px;
             margin-bottom: 10px;
             overflow: hidden;
         }
-        .calendar-cell.today { border: 2px solid #d789ad; background: #fff5fa; }
+        .calendar-cell.today { border: 2px solid #9d7fa8; background: #f8f3f8; }
         .calendar-cell.outside { opacity: .44; }
-        .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; }
+        .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; color: #5c4b66; }
         .event-chip {
             display:block;
             border-radius: 10px;
             padding: 5px 7px;
             margin: 4px 0;
-            color: #243234;
+            color: #3a3a3a;
             font-size: .78rem;
             line-height: 1.25;
             overflow: hidden;
         }
         .timeline-card {
-            background: rgba(255,255,255,.9);
-            border: 1px solid #ead5e2;
+            background: rgba(255,255,255,.92);
+            border: 1px solid #ddd2d8;
             border-radius: 18px;
             padding: 16px 18px;
             margin: 9px 0 15px;
         }
-        .muted { color:#718080; font-size:.9rem; }
+        .muted { color:#7a7a7a; font-size:.9rem; }
         .info-badge {
             display:inline-block;
-            background:#fff0d8;
+            background:#fef3e0;
             border-radius:999px;
             padding:3px 10px;
             font-size:.78rem;
         }
         div[data-testid="stForm"] {
-            background: rgba(255,255,255,.7);
+            background: rgba(255,255,255,.75);
             border-radius: 20px;
             padding: 14px;
         }
         .month-title {
             text-align:center;
-            color:#68475a;
+            color:#7a6b81;
             font-size:1.45rem;
             font-weight:700;
             padding-top:.2rem;
         }
         .brand-kicker {
-            color:#b66f93;
+            color:#a8809b;
             font-size:.82rem;
             font-weight:700;
             letter-spacing:.13em;
         }
         div.stButton > button[kind="primary"] {
-            background:#c87b9f;
-            border-color:#c87b9f;
+            background:#9d7fa8;
+            border-color:#9d7fa8;
         }
         @media (max-width: 700px) {
             .block-container { padding: 1rem .7rem; }
@@ -979,7 +979,7 @@ def main() -> None:
             st.title("รอผู้ดูแลอนุมัติบัญชี")
             st.info(
                 "บัญชีถูกสร้างแล้ว แต่ยังเปิดดูข้อมูลปฏิทินไม่ได้ "
-                "กรุณาให้ผู้ดูแลอนุมัติจากหน้า “ทีม”"
+                "กรุณาให้ผู้ดูแลอนุมัติจากหน้า "ทีม""
             )
             if st.button("ออกจากระบบ"):
                 sb.auth.sign_out()
