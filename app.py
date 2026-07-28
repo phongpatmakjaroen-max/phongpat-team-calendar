@@ -112,6 +112,25 @@ def inject_css() -> None:
             margin-bottom: 10px;
             overflow: hidden;
         }
+        .calendar-day-link {
+            display: block;
+            color: inherit !important;
+            text-decoration: none !important;
+            border-radius: 12px;
+        }
+        .calendar-day-link:hover .calendar-cell {
+            border-color: var(--blue);
+            box-shadow: 0 7px 18px rgba(75, 56, 43, .10);
+            transform: translateY(-1px);
+        }
+        .calendar-day-link:focus-visible {
+            outline: 3px solid #b8d1d7;
+            outline-offset: 2px;
+        }
+        .calendar-cell {
+            transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+            cursor: pointer;
+        }
         .calendar-scroll {
             width: 100%;
             overflow-x: auto;
@@ -537,6 +556,7 @@ def event_form(
     sb: Client,
     people: list[dict[str, Any]],
     event: dict[str, Any] | None = None,
+    form_key: str = "event_form",
 ) -> None:
     editing = event is not None
     title = "แก้ไขรายการ" if editing else "เพิ่มรายการ"
@@ -544,7 +564,7 @@ def event_form(
     current_people = (
         [p["name"] for p in event.get("people", [])] if editing else []
     )
-    with st.form("event_form", clear_on_submit=not editing):
+    with st.form(form_key, clear_on_submit=not editing):
         st.subheader(title)
         item_type = st.selectbox(
             "ลักษณะรายการ",
@@ -662,6 +682,89 @@ def event_form(
                 st.error(f"บันทึกไม่สำเร็จ: {exc}")
 
 
+@st.dialog("รายการประจำวัน", width="large")
+def day_schedule_dialog(
+    sb: Client,
+    people: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    selected_day: date,
+) -> None:
+    day_events = [event for event in events if event_covers(event, selected_day)]
+    day_events.sort(
+        key=lambda event: (
+            event.get("start_time") or "99:99:99",
+            event["title"].casefold(),
+        )
+    )
+
+    st.markdown(
+        f"### {selected_day.day} {MONTHS_TH[selected_day.month]} "
+        f"{selected_day.year + 543}"
+    )
+    st.caption(f"กำหนดการทั้งหมด {len(day_events)} รายการ")
+
+    if not day_events:
+        st.info("วันนี้ยังไม่มีกำหนดการ")
+    else:
+        for event in day_events:
+            is_holiday = event["item_type"] == "holiday"
+            color_hex = (
+                HOLIDAY_COLOR
+                if is_holiday
+                else PIN_COLORS[event.get("pin_color", "blue")][1]
+            )
+            event_time = (
+                event["start_time"][:5] + " น."
+                if event.get("start_time")
+                else "ไม่ระบุเวลา"
+            )
+            status_text = (
+                f" • {STATUS_LABELS[event['status']]}"
+                if event["item_type"] == "task"
+                else ""
+            )
+            details = html.escape(event.get("details") or "")
+            details_html = f"<div>{details}</div>" if details else ""
+            card_class = "month-agenda holiday" if is_holiday else "month-agenda"
+            st.markdown(
+                f"""
+                <div class="{card_class}" style="--event-color:{color_hex}">
+                  <div class="agenda-date">{event_time} • {ITEM_LABELS[event["item_type"]]}</div>
+                  <strong>{html.escape(event["title"])}</strong>
+                  <div class="muted">{html.escape(event_people_text(event))}{status_text}</div>
+                  {details_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with st.expander("แก้ไขรายการของวันนี้"):
+            event_by_label = {
+                (
+                    f"{event.get('start_time', '')[:5] or 'ไม่ระบุเวลา'} | "
+                    f"{event['title']}"
+                ): event
+                for event in day_events
+            }
+            selected_label = st.selectbox(
+                "เลือกรายการที่ต้องการแก้ไข",
+                list(event_by_label),
+                key=f"dialog_event_{selected_day.isoformat()}",
+            )
+            selected_event = event_by_label[selected_label]
+            event_form(
+                sb,
+                people,
+                selected_event,
+                form_key=f"dialog_event_form_{selected_event['id']}",
+            )
+
+    if st.button("ปิด", use_container_width=True, key="close_day_dialog"):
+        if "day" in st.query_params:
+            del st.query_params["day"]
+        st.rerun()
+
+
 def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     month_index = year * 12 + month - 1 + delta
     return month_index // 12, month_index % 12 + 1
@@ -735,7 +838,11 @@ def monthly_agenda_view(
         )
 
 
-def calendar_view(events: list[dict[str, Any]]) -> None:
+def calendar_view(
+    sb: Client,
+    people: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> None:
     today = date.today()
     if "calendar_year" not in st.session_state:
         st.session_state.calendar_year = today.year
@@ -822,12 +929,23 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
             if day.month != month:
                 classes.append("outside")
             calendar_parts.append(
+                f'<a class="calendar-day-link" href="?day={day.isoformat()}">'
                 f'<div class="{" ".join(classes)}">'
                 f'<div class="day-number">{day.day}</div>'
-                f'{"".join(chips)}</div>'
+                f'{"".join(chips)}</div></a>'
             )
     calendar_parts.append("</div></div>")
     st.markdown("".join(calendar_parts), unsafe_allow_html=True)
+
+    selected_day_value = st.query_params.get("day")
+    if selected_day_value:
+        try:
+            selected_day = date.fromisoformat(str(selected_day_value))
+            day_schedule_dialog(sb, people, events, selected_day)
+        except ValueError:
+            del st.query_params["day"]
+            st.rerun()
+
     monthly_agenda_view(events, year, month)
 
 
@@ -1288,7 +1406,7 @@ def main() -> None:
         ["ปฏิทิน", "กำหนดการทั้งหมด", "ทีม", "ประวัติอัปเดต", "สำรองข้อมูล"]
     )
     with calendar_tab:
-        calendar_view(events)
+        calendar_view(sb, people, events)
     with timeline_tab:
         timeline_view(sb, events, people)
     with team_tab:
