@@ -155,6 +155,41 @@ def inject_css() -> None:
         }
         .calendar-cell.today { border: 2px solid #9bb9c2; background: var(--blue-soft); }
         .calendar-cell.outside { opacity: .44; }
+        .st-key-calendar_native div[data-testid="stHorizontalBlock"] {
+            display: grid !important;
+            grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+            gap: .45rem !important;
+        }
+        .st-key-calendar_native div[data-testid="stColumn"] {
+            width: auto !important;
+            min-width: 0 !important;
+            flex: none !important;
+        }
+        .st-key-calendar_native [class*="st-key-calday_"] {
+            min-height: 118px;
+            padding: .36rem;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: rgba(255,255,255,.88);
+        }
+        .st-key-calendar_native [class*="st-key-calday_today_"] {
+            border: 2px solid #9bb9c2;
+            background: var(--blue-soft);
+        }
+        .st-key-calendar_native [class*="st-key-calday_outside_"] { opacity: .44; }
+        .st-key-calendar_native [class*="st-key-calday_"] button {
+            min-height: 1.9rem !important;
+            padding: .12rem .25rem !important;
+            border: 0 !important;
+            background: transparent !important;
+            color: var(--brown) !important;
+            font-weight: 700 !important;
+            box-shadow: none !important;
+        }
+        .st-key-calendar_native [class*="st-key-calday_"] button:hover {
+            background: var(--blue-soft) !important;
+            color: #355b68 !important;
+        }
         .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; }
         .event-chip {
             display:block;
@@ -343,6 +378,26 @@ def inject_css() -> None:
                 line-height: 1.1;
                 text-align: center;
             }
+            .st-key-calendar_native div[data-testid="stHorizontalBlock"] {
+                gap: .12rem !important;
+            }
+            .st-key-calendar_native [class*="st-key-calday_"] {
+                min-height: 76px;
+                padding: .12rem;
+                border-radius: 9px;
+            }
+            .st-key-calendar_native [class*="st-key-calday_"] button {
+                min-height: 1.45rem !important;
+                font-size: .66rem !important;
+                padding: 0 !important;
+            }
+            .st-key-calendar_native .event-chip {
+                padding: .08rem .1rem;
+                border-left-width: 2px !important;
+                border-radius: 4px;
+                font-size: .46rem;
+                line-height: 1.08;
+            }
             .month-title { font-size: 1.1rem; padding-top: .35rem; }
         }
         </style>
@@ -362,7 +417,9 @@ def supabase_ready() -> bool:
     return bool(
         secret("SUPABASE_URL")
         and secret("SUPABASE_ANON_KEY")
-        and secret("TEAM_SECRET_KEY")
+        and (secret("TEAM_ACCESS_CODE") or secret("TEAM_SECRET_KEY"))
+        and secret("TEAM_LOGIN_EMAIL")
+        and secret("TEAM_LOGIN_PASSWORD")
     )
 
 
@@ -388,49 +445,27 @@ def actor_name() -> str:
 def login_screen(sb: Client) -> None:
     st.markdown('<div class="brand-kicker">DAILYLOOK.SM</div>', unsafe_allow_html=True)
     st.title("ปฏิทินงานทีม")
-    st.subheader("จัดการงานของทีมในที่เดียว")
-    login_tab, signup_tab = st.tabs(["เข้าสู่ระบบ", "สร้างบัญชี"])
-    with login_tab:
-        with st.form("login"):
-            email = st.text_input("อีเมล")
-            password = st.text_input("รหัสผ่าน", type="password")
-            if st.form_submit_button("เข้าสู่ระบบ", use_container_width=True):
-                try:
-                    result = sb.auth.sign_in_with_password(
-                        {"email": email.strip(), "password": password}
-                    )
-                    st.session_state.user = result.user
-                    st.session_state.access_token = result.session.access_token
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"เข้าสู่ระบบไม่สำเร็จ: {exc}")
-    with signup_tab:
-        st.caption("สมาชิกใหม่อาจต้องยืนยันอีเมลก่อนเข้าสู่ระบบ")
-        with st.form("signup"):
-            name = st.text_input("ชื่อที่ใช้ในทีม")
-            email = st.text_input("อีเมล", key="signup_email")
-            password = st.text_input(
-                "รหัสผ่าน (อย่างน้อย 6 ตัว)", type="password", key="signup_password"
-            )
-            invite_code = st.text_input(
-                "Secret Key ของทีม", type="password", key="team_secret_key"
-            )
-            if st.form_submit_button("สร้างบัญชี", use_container_width=True):
-                expected = secret("TEAM_SECRET_KEY") or ""
-                if not hmac.compare_digest(invite_code, expected):
-                    st.error("Secret Key ของทีมไม่ถูกต้อง")
-                    return
-                try:
-                    sb.auth.sign_up(
-                        {
-                            "email": email.strip(),
-                            "password": password,
-                            "options": {"data": {"display_name": name.strip()}},
-                        }
-                    )
-                    st.success("สร้างบัญชีแล้ว กรุณาตรวจอีเมลเพื่อยืนยันบัญชี")
-                except Exception as exc:
-                    st.error(f"สร้างบัญชีไม่สำเร็จ: {exc}")
+    st.subheader("กรอกรหัสทีมเพื่อเข้าใช้งาน")
+    st.caption("สมาชิกไม่ต้องกรอกอีเมลหรือสร้างบัญชีแยก")
+    with st.form("team_code_login"):
+        access_code = st.text_input("รหัสเข้าใช้งาน", type="password")
+        if st.form_submit_button("เข้าใช้งาน", use_container_width=True):
+            expected = secret("TEAM_ACCESS_CODE") or secret("TEAM_SECRET_KEY") or ""
+            if not hmac.compare_digest(access_code.strip(), expected):
+                st.error("รหัสเข้าใช้งานไม่ถูกต้อง")
+                return
+            try:
+                result = sb.auth.sign_in_with_password(
+                    {
+                        "email": secret("TEAM_LOGIN_EMAIL").strip(),
+                        "password": secret("TEAM_LOGIN_PASSWORD"),
+                    }
+                )
+                st.session_state.user = result.user
+                st.session_state.access_token = result.session.access_token
+                st.rerun()
+            except Exception:
+                st.error("เชื่อมต่อบัญชีทีมไม่สำเร็จ กรุณาตรวจ Streamlit Secrets")
 
 
 def load_profile(sb: Client, user_id: str) -> dict[str, Any]:
@@ -741,7 +776,7 @@ def day_schedule_dialog(
         with st.expander("แก้ไขรายการของวันนี้"):
             event_by_label = {
                 (
-                    f"{event.get('start_time', '')[:5] or 'ไม่ระบุเวลา'} | "
+                    f"{(event.get('start_time') or '')[:5] or 'ไม่ระบุเวลา'} | "
                     f"{event['title']}"
                 ): event
                 for event in day_events
@@ -760,8 +795,7 @@ def day_schedule_dialog(
             )
 
     if st.button("ปิด", use_container_width=True, key="close_day_dialog"):
-        if "day" in st.query_params:
-            del st.query_params["day"]
+        st.session_state.pop("selected_calendar_day", None)
         st.rerun()
 
 
@@ -889,62 +923,71 @@ def calendar_view(
                 st.session_state.calendar_month = number
                 st.rerun()
 
-    calendar_parts = ['<div class="calendar-scroll"><div class="calendar-grid">']
-    for label in ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]:
-        calendar_parts.append(
-            f'<div class="calendar-weekday">{label}</div>'
-        )
-    cal = calendar.Calendar(firstweekday=0)
-    for week in cal.monthdatescalendar(int(year), month):
-        for day in week:
-            day_events = [event for event in events if event_covers(event, day)]
-            chips = []
-            for event in day_events[:3]:
-                is_holiday = event["item_type"] == "holiday"
-                color = (
-                    HOLIDAY_COLOR
-                    if is_holiday
-                    else PIN_COLORS[event.get("pin_color", "blue")][1]
-                )
-                icon = (
-                    "ℹ️ "
-                    if event["item_type"] == "info"
-                    else "🏖️ "
-                    if event["item_type"] == "holiday"
-                    else "✓ "
-                )
-                chip_class = "event-chip holiday" if is_holiday else "event-chip"
-                chips.append(
-                    f'<span class="{chip_class}" style="background:{color}35;'
-                    f'border-left:5px solid {color}">'
-                    f'{icon}{html.escape(event["title"])}</span>'
-                )
-            if len(day_events) > 3:
-                chips.append(
-                    f'<span class="muted">+ อีก {len(day_events) - 3} รายการ</span>'
-                )
-            classes = ["calendar-cell"]
-            if day == today:
-                classes.append("today")
-            if day.month != month:
-                classes.append("outside")
-            calendar_parts.append(
-                f'<a class="calendar-day-link" href="?day={day.isoformat()}">'
-                f'<div class="{" ".join(classes)}">'
-                f'<div class="day-number">{day.day}</div>'
-                f'{"".join(chips)}</div></a>'
+    with st.container(key="calendar_native"):
+        weekday_cols = st.columns(7, gap="small")
+        for col, label in zip(
+            weekday_cols, ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]
+        ):
+            col.markdown(
+                f'<div class="calendar-weekday">{label}</div>',
+                unsafe_allow_html=True,
             )
-    calendar_parts.append("</div></div>")
-    st.markdown("".join(calendar_parts), unsafe_allow_html=True)
 
-    selected_day_value = st.query_params.get("day")
+        cal = calendar.Calendar(firstweekday=0)
+        for week in cal.monthdatescalendar(int(year), month):
+            week_cols = st.columns(7, gap="small")
+            for col, day in zip(week_cols, week):
+                day_events = [event for event in events if event_covers(event, day)]
+                day_state = (
+                    "today_" if day == today else "outside_" if day.month != month else ""
+                )
+                with col:
+                    with st.container(key=f"calday_{day_state}{day.isoformat()}"):
+                        if st.button(
+                            str(day.day),
+                            key=f"open_day_{day.isoformat()}",
+                            use_container_width=True,
+                            help=f"เปิดรายการวันที่ {day.day} {MONTHS_TH[day.month]}",
+                        ):
+                            st.session_state.selected_calendar_day = day.isoformat()
+                        for event in day_events[:3]:
+                            is_holiday = event["item_type"] == "holiday"
+                            color = (
+                                HOLIDAY_COLOR
+                                if is_holiday
+                                else PIN_COLORS[event.get("pin_color", "blue")][1]
+                            )
+                            icon = (
+                                "ℹ️ "
+                                if event["item_type"] == "info"
+                                else "🏖️ "
+                                if is_holiday
+                                else "✓ "
+                            )
+                            chip_class = (
+                                "event-chip holiday" if is_holiday else "event-chip"
+                            )
+                            st.markdown(
+                                f'<span class="{chip_class}" '
+                                f'style="background:{color}35;'
+                                f'border-left:5px solid {color}">'
+                                f'{icon}{html.escape(event["title"])}</span>',
+                                unsafe_allow_html=True,
+                            )
+                        if len(day_events) > 3:
+                            st.caption(f"+ อีก {len(day_events) - 3} รายการ")
+
+    selected_day_value = st.session_state.get("selected_calendar_day")
     if selected_day_value:
         try:
-            selected_day = date.fromisoformat(str(selected_day_value))
-            day_schedule_dialog(sb, people, events, selected_day)
+            day_schedule_dialog(
+                sb,
+                people,
+                events,
+                date.fromisoformat(str(selected_day_value)),
+            )
         except ValueError:
-            del st.query_params["day"]
-            st.rerun()
+            st.session_state.pop("selected_calendar_day", None)
 
     monthly_agenda_view(events, year, month)
 
@@ -1342,8 +1385,8 @@ def main() -> None:
 
             1. สร้าง Supabase Project
             2. รัน `supabase_schema.sql` และ `seed_2026.sql` ใน SQL Editor
-            3. เพิ่ม `SUPABASE_URL`, `SUPABASE_ANON_KEY` และ `TEAM_SECRET_KEY`
-               ใน Streamlit Secrets
+            3. เพิ่ม `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TEAM_ACCESS_CODE`,
+               `TEAM_LOGIN_EMAIL` และ `TEAM_LOGIN_PASSWORD` ใน Streamlit Secrets
             """
         )
         return
