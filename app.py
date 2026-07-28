@@ -25,6 +25,7 @@ st.set_page_config(
 )
 
 PIN_COLORS = {
+    "red": ("แดง", "#D95F59"),
     "blue": ("ฟ้า", "#7FA9B8"),
     "green": ("เขียว", "#8DAA91"),
     "orange": ("ส้ม", "#D9A06E"),
@@ -33,6 +34,7 @@ PIN_COLORS = {
     "brown": ("น้ำตาล", "#AA8B73"),
 }
 PIN_SYMBOLS = {
+    "red": "🔴",
     "blue": "🔵",
     "green": "🟢",
     "orange": "🟠",
