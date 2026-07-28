@@ -740,6 +740,29 @@ def update_task_status(sb: Client, event: dict[str, Any], new_status: str) -> No
     )
 
 
+def completion_checkbox(
+    sb: Client,
+    event: dict[str, Any],
+    key: str,
+) -> None:
+    """Show a one-click completion toggle for task events."""
+    if event["item_type"] != "task" or event.get("_builtin") or event.get("_leave"):
+        return
+    was_done = event.get("status") == "done"
+    is_done = st.checkbox("ทำแล้ว", value=was_done, key=key)
+    if is_done != was_done:
+        try:
+            update_task_status(
+                sb,
+                event,
+                "done" if is_done else "not_started",
+            )
+            st.toast("บันทึกว่าเสร็จแล้ว" if is_done else "เปิดงานอีกครั้ง")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"อัปเดตสถานะไม่สำเร็จ: {exc}")
+
+
 def upsert_event_people(
     sb: Client, event_id: str, person_ids: list[str]
 ) -> None:
@@ -759,6 +782,13 @@ def can_manage_event(event: dict[str, Any], role: str) -> bool:
 
 def delete_event(sb: Client, event: dict[str, Any]) -> None:
     """Move the event to trash so it can be restored."""
+    sb.table("events").update(
+        {
+            "deleted_at": datetime.now(BANGKOK_TZ).isoformat(),
+            "deleted_by": actor_id(),
+            "updated_by": actor_id(),
+        }
+    ).eq("id", event["id"]).execute()
     log_action(
         sb,
         event["id"],
@@ -768,13 +798,6 @@ def delete_event(sb: Client, event: dict[str, Any]) -> None:
             "created_by": event.get("created_by"),
         },
     )
-    sb.table("events").update(
-        {
-            "deleted_at": datetime.now(BANGKOK_TZ).isoformat(),
-            "deleted_by": actor_id(),
-            "updated_by": actor_id(),
-        }
-    ).eq("id", event["id"]).execute()
 
 
 def restore_event(sb: Client, event: dict[str, Any]) -> None:
@@ -1092,6 +1115,11 @@ def day_schedule_dialog(
                 """,
                 unsafe_allow_html=True,
             )
+            completion_checkbox(
+                sb,
+                event,
+                key=f"dialog_done_{event['id']}_{selected_day.isoformat()}",
+            )
             render_attachments(
                 sb, event, can_manage_event(event, role)
             )
@@ -1307,7 +1335,9 @@ def calendar_view(
                                 if event["item_type"] == "info"
                                 else "🏖️ "
                                 if is_holiday
-                                else "✓ "
+                                else "✅ "
+                                if event.get("status") == "done"
+                                else "☐ "
                             )
                             chip_class = (
                                 "event-chip holiday" if is_holiday else "event-chip"
@@ -1432,7 +1462,13 @@ def timeline_view(
                 unsafe_allow_html=True,
             )
             if event["item_type"] == "task":
-                action_col, save_col = st.columns([3, 1])
+                done_col, action_col, save_col = st.columns([1, 2, 1])
+                with done_col:
+                    completion_checkbox(
+                        sb,
+                        event,
+                        key=f"timeline_done_{event['id']}_{day.isoformat()}",
+                    )
                 selected_status = action_col.selectbox(
                     "อัปเดตสถานะ",
                     list(STATUS_LABELS),
