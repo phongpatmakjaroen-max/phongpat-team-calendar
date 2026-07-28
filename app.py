@@ -30,8 +30,16 @@ PIN_COLORS = {
     "pink": ("ชมพู", "#D99AA5"),
     "purple": ("ม่วง", "#A796B8"),
     "brown": ("น้ำตาล", "#AA8B73"),
-    "red": ("แดง", "#D85C5C"),
 }
+PIN_SYMBOLS = {
+    "blue": "🔵",
+    "green": "🟢",
+    "orange": "🟠",
+    "pink": "🩷",
+    "purple": "🟣",
+    "brown": "🟤",
+}
+HOLIDAY_COLOR = "#7296A3"
 STATUS_LABELS = {
     "not_started": "ยังไม่เริ่ม",
     "in_progress": "กำลังทำ",
@@ -39,9 +47,9 @@ STATUS_LABELS = {
     "done": "เสร็จแล้ว",
 }
 ITEM_LABELS = {
-    "task": "งานที่ต้องติดตาม",
-    "info": "รายการแจ้งข้อมูล",
-    "holiday": "วันหยุด",
+    "task": "📌 งาน / กำหนดส่ง",
+    "info": "📣 แจ้งข้อมูล / นัดหมาย",
+    "holiday": "🏖️ วันหยุด / ปิดร้าน",
 }
 MONTHS_TH = [
     "",
@@ -117,12 +125,47 @@ def inject_css() -> None:
             line-height: 1.25;
             overflow: hidden;
         }
+        .event-chip.holiday {
+            background: #e8f1f3 !important;
+            border-left-color: var(--blue) !important;
+            color: #37525c;
+            font-weight: 600;
+        }
         .timeline-card {
             background: var(--paper);
             border: 1px solid var(--line);
             border-radius: 18px;
             padding: 16px 18px;
             margin: 9px 0 15px;
+        }
+        .month-agenda {
+            background: var(--paper);
+            border: 1px solid var(--line);
+            border-left: 6px solid var(--event-color);
+            border-radius: 16px;
+            padding: 14px 16px;
+            margin: 8px 0;
+            box-shadow: 0 4px 15px rgba(75, 56, 43, .035);
+        }
+        .month-agenda.holiday {
+            background: #edf4f5;
+            border-color: #cddfe3;
+            border-left-color: var(--blue);
+        }
+        .agenda-date {
+            color: var(--blue);
+            font-size: .82rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .holiday-badge {
+            display:inline-block;
+            background:#d9e9ec;
+            color:#37525c;
+            border-radius:999px;
+            padding:3px 10px;
+            font-size:.76rem;
+            font-weight:700;
         }
         .muted { color:var(--muted); font-size:.9rem; }
         .info-badge {
@@ -151,10 +194,11 @@ def inject_css() -> None:
             font-weight:700;
             letter-spacing:.13em;
         }
-        div.stButton > button[kind="primary"] {
-            background:#8DAA91;
-            border-color:#8DAA91;
-            color:#fff;
+        div.stButton > button[kind="primary"],
+        button[data-testid="stBaseButton-primary"] {
+            background:var(--brown-soft) !important;
+            border-color:var(--brown-soft) !important;
+            color:#fff !important;
         }
         div.stButton > button {
             border-color:var(--line);
@@ -163,11 +207,23 @@ def inject_css() -> None:
         }
         [data-baseweb="tab-list"] button[aria-selected="true"] {
             color:var(--brown);
-            border-bottom-color:#8DAA91;
+            border-bottom-color:var(--brown-soft);
         }
         [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong,
         [data-testid="stSidebar"] h3 {
             color:var(--brown);
+        }
+        [data-baseweb="select"] > div,
+        [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] {
+            background:#fffefb !important;
+            border-color:#d8e3e5 !important;
+        }
+        [data-baseweb="select"] span,
+        [data-baseweb="input"] input,
+        [data-baseweb="textarea"] textarea {
+            color:var(--brown) !important;
+            -webkit-text-fill-color:var(--brown) !important;
         }
         @media (max-width: 700px) {
             .block-container { padding: 1rem .7rem; }
@@ -196,24 +252,13 @@ def supabase_ready() -> bool:
 
 
 def get_supabase() -> Client:
-    """สร้าง Supabase client พร้อม timeout configuration"""
+    # Supabase's auth session lives on the client. Keeping the client in
+    # st.session_state prevents one browser session from sharing auth state
+    # with another user.
     if "supabase_client" not in st.session_state:
-        try:
-            url = secret("SUPABASE_URL")
-            key = secret("SUPABASE_ANON_KEY")
-            
-            if not url or not key:
-                raise ValueError("ตั้งค่า SUPABASE_URL และ SUPABASE_ANON_KEY ไม่ครบ")
-            
-            import httpx
-            client_options = {
-                "timeout": httpx.Timeout(30.0, connect=10.0)
-            }
-            st.session_state.supabase_client = create_client(url, key)
-        except Exception as e:
-            st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase: {str(e)}")
-            st.stop()
-    
+        st.session_state.supabase_client = create_client(
+            secret("SUPABASE_URL"), secret("SUPABASE_ANON_KEY")
+        )
     return st.session_state.supabase_client
 
 
@@ -235,26 +280,15 @@ def login_screen(sb: Client) -> None:
             email = st.text_input("อีเมล")
             password = st.text_input("รหัสผ่าน", type="password")
             if st.form_submit_button("เข้าสู่ระบบ", use_container_width=True):
-                if not email or not password:
-                    st.error("กรุณาใส่อีเมลและรหัสผ่าน")
-                    return
                 try:
-                    with st.spinner("กำลังตรวจสอบ..."):
-                        result = sb.auth.sign_in_with_password(
-                            {"email": email.strip(), "password": password}
-                        )
+                    result = sb.auth.sign_in_with_password(
+                        {"email": email.strip(), "password": password}
+                    )
                     st.session_state.user = result.user
                     st.session_state.access_token = result.session.access_token
-                    st.success("เข้าสู่ระบบสำเร็จ ✅")
                     st.rerun()
                 except Exception as exc:
-                    error_msg = str(exc)
-                    if "timeout" in error_msg.lower():
-                        st.error("⏱️ การเชื่อมต่อหมดเวลา กรุณาลองใหม่")
-                    elif "invalid" in error_msg.lower():
-                        st.error("❌ อีเมลหรือรหัสผ่านไม่ถูกต้อง")
-                    else:
-                        st.error(f"❌ เข้าสู่ระบบไม่สำเร็จ: {exc}")
+                    st.error(f"เข้าสู่ระบบไม่สำเร็จ: {exc}")
     with signup_tab:
         st.caption("สมาชิกใหม่อาจต้องยืนยันอีเมลก่อนเข้าสู่ระบบ")
         with st.form("signup"):
@@ -272,15 +306,14 @@ def login_screen(sb: Client) -> None:
                     st.error("Secret Key ของทีมไม่ถูกต้อง")
                     return
                 try:
-                    with st.spinner("กำลังสร้างบัญชี..."):
-                        sb.auth.sign_up(
-                            {
-                                "email": email.strip(),
-                                "password": password,
-                                "options": {"data": {"display_name": name.strip()}},
-                            }
-                        )
-                    st.success("สร้างบัญชีแล้ว ✅ กรุณาตรวจอีเมลเพื่อยืนยันบัญชี")
+                    sb.auth.sign_up(
+                        {
+                            "email": email.strip(),
+                            "password": password,
+                            "options": {"data": {"display_name": name.strip()}},
+                        }
+                    )
+                    st.success("สร้างบัญชีแล้ว กรุณาตรวจอีเมลเพื่อยืนยันบัญชี")
                 except Exception as exc:
                     st.error(f"สร้างบัญชีไม่สำเร็จ: {exc}")
 
@@ -422,6 +455,11 @@ def event_form(
             list(ITEM_LABELS),
             format_func=ITEM_LABELS.get,
             index=list(ITEM_LABELS).index(event["item_type"]) if editing else 0,
+            help=(
+                "งาน / กำหนดส่ง = รายการที่ต้องติดตามสถานะ • "
+                "แจ้งข้อมูล / นัดหมาย = ข้อมูลที่ไม่ต้องติ๊กเสร็จ • "
+                "วันหยุด / ปิดร้าน = แสดงด้วยสีวันหยุดโดยเฉพาะ"
+            ),
         )
         event_title = st.text_input("ชื่องาน / หัวข้อ", value=event["title"] if editing else "")
         details = st.text_area(
@@ -449,20 +487,21 @@ def event_form(
                 if editing and event.get("start_time")
                 else time(9, 0)
             ),
-            disabled=not has_time,
+            help="เลือกเวลาได้ทันที ระบบจะบันทึกเวลานี้เมื่อทำเครื่องหมาย “ระบุเวลา”",
         )
         pin_color = st.selectbox(
             "สีหมุด",
             list(PIN_COLORS),
-            format_func=lambda key: f"● {PIN_COLORS[key][0]}",
+            format_func=lambda key: f"{PIN_SYMBOLS[key]} {PIN_COLORS[key][0]}",
             index=list(PIN_COLORS).index(event["pin_color"]) if editing else 0,
+            help="สีหมุดใช้แยกกลุ่มงาน ส่วนรายการวันหยุดจะแสดงเป็นสีฟ้าอ่อนเสมอ",
         )
         priority = st.selectbox(
             "ความเร่งด่วน",
             ["normal", "urgent"],
             format_func=lambda key: "ด่วน" if key == "urgent" else "ปกติ",
             index=1 if editing and event.get("priority") == "urgent" else 0,
-            disabled=item_type != "task",
+            help="ใช้กับลักษณะรายการ “งาน / กำหนดส่ง”",
         )
         selected_people = st.multiselect(
             "ผู้รับผิดชอบ / ผู้เกี่ยวข้อง",
@@ -474,7 +513,7 @@ def event_form(
             list(STATUS_LABELS),
             format_func=STATUS_LABELS.get,
             index=list(STATUS_LABELS).index(event["status"]) if editing else 0,
-            disabled=item_type != "task",
+            help="ใช้กับลักษณะรายการ “งาน / กำหนดส่ง”",
         )
         submitted = st.form_submit_button(
             "บันทึกการแก้ไข" if editing else "เพิ่มรายการ",
@@ -530,6 +569,74 @@ def event_form(
 def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     month_index = year * 12 + month - 1 + delta
     return month_index // 12, month_index % 12 + 1
+
+
+def monthly_agenda_view(
+    events: list[dict[str, Any]], year: int, month: int
+) -> None:
+    month_start = date(year, month, 1)
+    next_year, next_month = shift_month(year, month, 1)
+    month_end = date(next_year, next_month, 1) - timedelta(days=1)
+    monthly_events = [
+        event
+        for event in events
+        if parse_date(event["start_date"]) <= month_end
+        and parse_date(event["end_date"]) >= month_start
+    ]
+    monthly_events.sort(
+        key=lambda event: (
+            parse_date(event["start_date"]),
+            event.get("start_time") or "99:99:99",
+            event["title"].casefold(),
+        )
+    )
+
+    st.markdown("---")
+    st.markdown(f"### กำหนดการทั้งหมดในเดือน{MONTHS_TH[month]}")
+    st.caption(
+        f"รวม {len(monthly_events)} รายการ • เรียงตามวันที่และเวลา "
+        "• วันหยุดแสดงด้วยการ์ดสีฟ้าอ่อน"
+    )
+    if not monthly_events:
+        st.info("เดือนนี้ยังไม่มีกำหนดการ")
+        return
+
+    for event in monthly_events:
+        is_holiday = event["item_type"] == "holiday"
+        color_hex = (
+            HOLIDAY_COLOR
+            if is_holiday
+            else PIN_COLORS[event.get("pin_color", "blue")][1]
+        )
+        event_time = (
+            event["start_time"][:5] + " น."
+            if event.get("start_time")
+            else "ไม่ระบุเวลา"
+        )
+        kind_badge = (
+            '<span class="holiday-badge">วันหยุด</span>'
+            if is_holiday
+            else f'<span class="info-badge">{ITEM_LABELS[event["item_type"]]}</span>'
+        )
+        status_text = (
+            f" • {STATUS_LABELS[event['status']]}"
+            if event["item_type"] == "task"
+            else ""
+        )
+        details = html.escape(event.get("details") or "")
+        details_html = f"<div>{details}</div>" if details else ""
+        card_class = "month-agenda holiday" if is_holiday else "month-agenda"
+        st.markdown(
+            f"""
+            <div class="{card_class}" style="--event-color:{color_hex}">
+              <div class="agenda-date">{format_range(event)} • {event_time}</div>
+              <strong>{html.escape(event["title"])}</strong> {kind_badge}
+              <div class="muted">{html.escape(event_people_text(event))}{status_text}</div>
+              {details_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def calendar_view(events: list[dict[str, Any]]) -> None:
@@ -591,7 +698,12 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
             day_events = [event for event in events if event_covers(event, day)]
             chips = []
             for event in day_events[:3]:
-                color = PIN_COLORS[event["pin_color"]][1]
+                is_holiday = event["item_type"] == "holiday"
+                color = (
+                    HOLIDAY_COLOR
+                    if is_holiday
+                    else PIN_COLORS[event.get("pin_color", "blue")][1]
+                )
                 icon = (
                     "ℹ️ "
                     if event["item_type"] == "info"
@@ -599,8 +711,9 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
                     if event["item_type"] == "holiday"
                     else "✓ "
                 )
+                chip_class = "event-chip holiday" if is_holiday else "event-chip"
                 chips.append(
-                    f'<span class="event-chip" style="background:{color}35;'
+                    f'<span class="{chip_class}" style="background:{color}35;'
                     f'border-left:5px solid {color}">'
                     f'{icon}{html.escape(event["title"])}</span>'
                 )
@@ -619,6 +732,7 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
                 f'{"".join(chips)}</div>',
                 unsafe_allow_html=True,
             )
+    monthly_agenda_view(events, year, month)
 
 
 def filter_events(
@@ -1007,7 +1121,7 @@ def main() -> None:
     inject_css()
     if not supabase_ready():
         st.title("DAILYLOOK.SM")
-        st.warning("⚠️ ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
+        st.warning("ยังไม่ได้เชื่อมฐานข้อมูล Supabase")
         st.markdown(
             """
             ตั้งค่าให้พร้อมใช้งานโดย:
@@ -1030,7 +1144,7 @@ def main() -> None:
             st.title("รอผู้ดูแลอนุมัติบัญชี")
             st.info(
                 "บัญชีถูกสร้างแล้ว แต่ยังเปิดดูข้อมูลปฏิทินไม่ได้ "
-                "กรุณาให้ผู้ดูแลอนุมัติจากหน้า ทีม"
+                "กรุณาให้ผู้ดูแลอนุมัติจากหน้า “ทีม”"
             )
             if st.button("ออกจากระบบ"):
                 sb.auth.sign_out()
@@ -1040,13 +1154,9 @@ def main() -> None:
         people = load_people(sb)
         profiles = load_profiles(sb)
         events = load_events(sb)
-    except Exception as exc:
+    except Exception:
         st.session_state.clear()
-        error_msg = str(exc)
-        if "timeout" in error_msg.lower():
-            st.error("⏱️ การเชื่อมต่อหมดเวลา กรุณาลองใหม่")
-        else:
-            st.error(f"❌ เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่: {exc}")
+        st.error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่")
         st.rerun()
         return
 
