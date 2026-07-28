@@ -195,15 +195,39 @@ def inject_css() -> None:
             letter-spacing:.13em;
         }
         div.stButton > button[kind="primary"],
-        button[data-testid="stBaseButton-primary"] {
-            background:var(--brown-soft) !important;
-            border-color:var(--brown-soft) !important;
-            color:#fff !important;
+        div.stFormSubmitButton > button,
+        button[kind="primaryFormSubmit"],
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-primaryFormSubmit"] {
+            background:#668993 !important;
+            border-color:#668993 !important;
+            color:#ffffff !important;
+            box-shadow:0 4px 12px rgba(76, 112, 122, .16) !important;
+        }
+        div.stButton > button[kind="primary"]:hover,
+        div.stFormSubmitButton > button:hover,
+        button[kind="primaryFormSubmit"]:hover,
+        button[data-testid="stBaseButton-primary"]:hover,
+        button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+            background:#537781 !important;
+            border-color:#537781 !important;
+            color:#ffffff !important;
+        }
+        div.stButton > button[kind="primary"] p,
+        div.stFormSubmitButton > button p,
+        button[kind="primaryFormSubmit"] p,
+        button[data-testid="stBaseButton-primary"] p,
+        button[data-testid="stBaseButton-primaryFormSubmit"] p {
+            color:#ffffff !important;
+            font-weight:700 !important;
         }
         div.stButton > button {
             border-color:var(--line);
             color:var(--brown);
             border-radius:10px;
+        }
+        div.stButton > button p {
+            color:inherit !important;
         }
         [data-baseweb="tab-list"] button[aria-selected="true"] {
             color:var(--brown);
