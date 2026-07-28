@@ -272,19 +272,58 @@ def inject_css() -> None:
             -webkit-text-fill-color:var(--brown) !important;
         }
         @media (max-width: 700px) {
-            .block-container { padding: 1rem .7rem; }
+            .block-container {
+                padding: .75rem .35rem 2rem;
+                max-width: 100%;
+                overflow-x: hidden;
+            }
             .calendar-scroll {
-                margin-left: -.25rem;
-                width: calc(100% + .5rem);
-                border-radius: 12px;
+                width: 100%;
+                margin: 0;
+                padding: 1px 0 6px;
+                overflow-x: hidden;
+                border-radius: 10px;
             }
             .calendar-grid {
-                grid-template-columns: repeat(7, 112px);
-                gap: 6px;
-                min-width: 820px;
+                width: 100%;
+                min-width: 0;
+                grid-template-columns: repeat(7, minmax(0, 1fr));
+                gap: 2px;
             }
-            .calendar-cell { min-height: 112px; padding: 7px; margin-bottom: 0; }
-            .event-chip { font-size: .68rem; padding: 4px; }
+            .calendar-weekday {
+                min-width: 0;
+                padding: 5px 0;
+                border-radius: 6px;
+                font-size: .68rem;
+            }
+            .calendar-cell {
+                min-width: 0;
+                min-height: 92px;
+                padding: 3px 2px;
+                margin-bottom: 0;
+            }
+            .day-number {
+                margin-bottom: 3px;
+                font-size: .78rem;
+                text-align: center;
+            }
+            .event-chip {
+                min-width: 0;
+                margin: 2px 0;
+                padding: 3px 2px;
+                border-left-width: 3px !important;
+                border-radius: 5px;
+                font-size: .54rem;
+                line-height: 1.15;
+                white-space: nowrap;
+                text-overflow: ellipsis;
+            }
+            .calendar-cell .muted {
+                display: block;
+                font-size: .52rem;
+                line-height: 1.1;
+                text-align: center;
+            }
             .month-title { font-size: 1.1rem; padding-top: .35rem; }
         }
         </style>
