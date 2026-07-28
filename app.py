@@ -7,7 +7,8 @@ import html
 import io
 import json
 import os
-from datetime import date, time, timedelta
+import uuid
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -51,6 +52,18 @@ ITEM_LABELS = {
     "info": "📣 แจ้งข้อมูล / นัดหมาย",
     "holiday": "🏖️ วันหยุด / ปิดร้าน",
 }
+RECURRENCE_LABELS = {
+    "none": "ไม่ทำซ้ำ",
+    "daily": "ทุกวัน",
+    "weekly": "ทุกสัปดาห์",
+    "monthly": "ทุกเดือน",
+}
+LEAVE_STATUS_LABELS = {
+    "pending": "รออนุมัติ",
+    "approved": "อนุมัติแล้ว",
+    "rejected": "ไม่อนุมัติ",
+}
+ATTACHMENT_BUCKET = "event-attachments"
 MONTHS_TH = [
     "",
     "มกราคม",
@@ -548,23 +561,65 @@ def load_profiles(sb: Client) -> list[dict[str, Any]]:
     )
 
 
-def load_events(sb: Client) -> list[dict[str, Any]]:
-    events = (
+def load_events(sb: Client, include_deleted: bool = False) -> list[dict[str, Any]]:
+    query = (
         sb.table("events")
         .select("*, event_people(person_id, people(id,name))")
-        .order("start_date")
-        .order("start_time")
-        .execute()
-        .data
-        or []
     )
+    if include_deleted:
+        query = query.not_.is_("deleted_at", "null")
+    else:
+        query = query.is_("deleted_at", "null")
+    events = query.order("start_date").order("start_time").execute().data or []
     for event in events:
         event["people"] = [
             link["people"]
             for link in event.get("event_people", [])
             if link.get("people")
         ]
-    return merge_builtin_thai_holidays(events)
+    return events if include_deleted else merge_builtin_thai_holidays(events)
+
+
+def load_attachments(sb: Client, event_id: str) -> list[dict[str, Any]]:
+    return (
+        sb.table("event_attachments")
+        .select("*")
+        .eq("event_id", event_id)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+
+def attachment_url(sb: Client, storage_path: str) -> str:
+    return sb.storage.from_(ATTACHMENT_BUCKET).get_public_url(storage_path)
+
+
+def upload_attachment(sb: Client, event_id: str, uploaded_file: Any) -> None:
+    safe_name = os.path.basename(uploaded_file.name).replace("/", "_")
+    storage_path = f"{event_id}/{uuid.uuid4().hex}-{safe_name}"
+    content = uploaded_file.getvalue()
+    sb.storage.from_(ATTACHMENT_BUCKET).upload(
+        storage_path,
+        content,
+        {"content-type": uploaded_file.type or "application/octet-stream"},
+    )
+    sb.table("event_attachments").insert(
+        {
+            "event_id": event_id,
+            "file_name": safe_name,
+            "storage_path": storage_path,
+            "mime_type": uploaded_file.type,
+            "file_size": len(content),
+            "uploaded_by": actor_id(),
+        }
+    ).execute()
+
+
+def delete_attachment(sb: Client, attachment: dict[str, Any]) -> None:
+    sb.storage.from_(ATTACHMENT_BUCKET).remove([attachment["storage_path"]])
+    sb.table("event_attachments").delete().eq("id", attachment["id"]).execute()
 
 
 THAI_HOLIDAYS_2026 = [
@@ -695,13 +750,13 @@ def upsert_event_people(
 
 def can_manage_event(event: dict[str, Any], role: str) -> bool:
     """Admins manage every saved event; members manage only their own."""
-    if event.get("_builtin"):
+    if event.get("_builtin") or event.get("_leave"):
         return False
     return role == "admin" or str(event.get("created_by") or "") == str(actor_id())
 
 
 def delete_event(sb: Client, event: dict[str, Any]) -> None:
-    """Audit first, then delete the selected event and its linked people."""
+    """Move the event to trash so it can be restored."""
     log_action(
         sb,
         event["id"],
@@ -711,8 +766,81 @@ def delete_event(sb: Client, event: dict[str, Any]) -> None:
             "created_by": event.get("created_by"),
         },
     )
+    sb.table("events").update(
+        {
+            "deleted_at": datetime.now(BANGKOK_TZ).isoformat(),
+            "deleted_by": actor_id(),
+            "updated_by": actor_id(),
+        }
+    ).eq("id", event["id"]).execute()
+
+
+def restore_event(sb: Client, event: dict[str, Any]) -> None:
+    sb.table("events").update(
+        {"deleted_at": None, "deleted_by": None, "updated_by": actor_id()}
+    ).eq("id", event["id"]).execute()
+    log_action(sb, event["id"], "restore", {"title": event["title"]})
+
+
+def permanently_delete_event(sb: Client, event: dict[str, Any]) -> None:
+    for attachment in load_attachments(sb, event["id"]):
+        sb.storage.from_(ATTACHMENT_BUCKET).remove([attachment["storage_path"]])
     sb.table("event_people").delete().eq("event_id", event["id"]).execute()
     sb.table("events").delete().eq("id", event["id"]).execute()
+
+
+def add_months(day: date, months: int = 1) -> date:
+    month_index = day.year * 12 + day.month - 1 + months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def recurrence_dates(start: date, until: date, recurrence: str) -> list[date]:
+    dates: list[date] = []
+    current = start
+    while current <= until and len(dates) < 366:
+        dates.append(current)
+        if recurrence == "daily":
+            current += timedelta(days=1)
+        elif recurrence == "weekly":
+            current += timedelta(days=7)
+        elif recurrence == "monthly":
+            current = add_months(current)
+        else:
+            break
+    return dates
+
+
+def render_attachments(
+    sb: Client, event: dict[str, Any], allow_delete: bool = False
+) -> None:
+    if event.get("_builtin") or event.get("_leave"):
+        return
+    try:
+        attachments = load_attachments(sb, event["id"])
+    except Exception:
+        return
+    if not attachments:
+        return
+    st.caption("ไฟล์แนบ")
+    for attachment in attachments:
+        link_col, delete_col = st.columns([5, 1])
+        link_col.markdown(
+            f"[📎 {html.escape(attachment['file_name'])}]"
+            f"({attachment_url(sb, attachment['storage_path'])})"
+        )
+        if allow_delete and delete_col.button(
+            "ลบไฟล์", key=f"delete_attachment_{attachment['id']}"
+        ):
+            delete_attachment(sb, attachment)
+            log_action(
+                sb,
+                event["id"],
+                "delete_attachment",
+                {"file_name": attachment["file_name"]},
+            )
+            st.rerun()
 
 
 def event_form(
@@ -794,6 +922,32 @@ def event_form(
             index=list(STATUS_LABELS).index(event["status"]) if editing else 0,
             help="ใช้กับลักษณะรายการ “งาน / กำหนดส่ง”",
         )
+        recurrence = st.selectbox(
+            "ทำซ้ำ",
+            list(RECURRENCE_LABELS),
+            format_func=RECURRENCE_LABELS.get,
+            index=(
+                list(RECURRENCE_LABELS).index(event.get("recurrence", "none"))
+                if editing else 0
+            ),
+            disabled=editing,
+            help="ตอนสร้างใหม่ ระบบจะสร้างแต่ละรอบเป็นรายการที่แก้ไขแยกกันได้",
+        )
+        recurrence_until = st.date_input(
+            "ทำซ้ำถึงวันที่",
+            value=(
+                parse_date(event["recurrence_until"])
+                if editing and event.get("recurrence_until")
+                else start_date
+            ),
+            format="DD/MM/YYYY",
+            disabled=editing or recurrence == "none",
+        )
+        attachment = st.file_uploader(
+            "แนบไฟล์ (ไม่เกิน 10 MB)",
+            key=f"attachment_{form_key}",
+            help="รองรับรูปภาพ PDF เอกสาร และไฟล์ทั่วไป",
+        )
         submitted = st.form_submit_button(
             "บันทึกการแก้ไข" if editing else "เพิ่มรายการ",
             type="primary",
@@ -806,6 +960,12 @@ def event_form(
             if end_date < start_date:
                 st.error("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น")
                 return
+            if recurrence != "none" and recurrence_until < start_date:
+                st.error("วันสิ้นสุดการทำซ้ำต้องไม่ก่อนวันเริ่มต้น")
+                return
+            if attachment and attachment.size > 10 * 1024 * 1024:
+                st.error("ไฟล์แนบต้องมีขนาดไม่เกิน 10 MB")
+                return
             payload = {
                 "title": event_title.strip(),
                 "details": details.strip(),
@@ -817,6 +977,10 @@ def event_form(
                 "priority": priority if item_type == "task" else "normal",
                 "status": status if item_type == "task" else "not_started",
                 "updated_by": actor_id(),
+                "recurrence": recurrence,
+                "recurrence_until": (
+                    recurrence_until.isoformat() if recurrence != "none" else None
+                ),
             }
             try:
                 if editing:
@@ -828,16 +992,41 @@ def event_form(
                     )
                     event_id = event["id"]
                     action = "update"
+                    if attachment:
+                        upload_attachment(sb, event_id, attachment)
                 else:
                     payload["created_by"] = actor_id()
-                    result = sb.table("events").insert(payload).execute()
+                    duration = end_date - start_date
+                    starts = recurrence_dates(
+                        start_date,
+                        recurrence_until if recurrence != "none" else start_date,
+                        recurrence,
+                    )
+                    parent_id = str(uuid.uuid4()) if len(starts) > 1 else None
+                    rows = []
+                    for occurrence_start in starts:
+                        row = dict(payload)
+                        row["start_date"] = occurrence_start.isoformat()
+                        row["end_date"] = (occurrence_start + duration).isoformat()
+                        row["recurrence_parent_id"] = parent_id
+                        rows.append(row)
+                    result = sb.table("events").insert(rows).execute()
                     event_id = result.data[0]["id"]
+                    for saved in result.data:
+                        upsert_event_people(
+                            sb,
+                            saved["id"],
+                            [person_by_name[name] for name in selected_people],
+                        )
+                    if attachment:
+                        upload_attachment(sb, event_id, attachment)
                     action = "create"
-                upsert_event_people(
-                    sb,
-                    event_id,
-                    [person_by_name[name] for name in selected_people],
-                )
+                if editing:
+                    upsert_event_people(
+                        sb,
+                        event_id,
+                        [person_by_name[name] for name in selected_people],
+                    )
                 log_action(sb, event_id, action, payload)
                 st.success("บันทึกรายการแล้ว")
                 st.rerun()
@@ -901,12 +1090,15 @@ def day_schedule_dialog(
                 """,
                 unsafe_allow_html=True,
             )
+            render_attachments(
+                sb, event, can_manage_event(event, role)
+            )
 
         editable_day_events = [
             event for event in day_events if can_manage_event(event, role)
         ]
         if editable_day_events:
-            with st.expander("แก้ไขหรือลบรายการของวันนี้"):
+            with st.expander("แก้ไขหรือย้ายรายการของวันนี้เข้าถังขยะ"):
                 event_by_label = {
                 (
                     f"{(event.get('start_time') or '')[:5] or 'ไม่ระบุเวลา'} | "
@@ -928,11 +1120,11 @@ def day_schedule_dialog(
                 )
                 st.divider()
                 confirm_delete = st.checkbox(
-                    "ยืนยันว่าต้องการลบรายการนี้",
+                    "ยืนยันว่าต้องการย้ายรายการนี้เข้าถังขยะ",
                     key=f"dialog_confirm_delete_{selected_event['id']}",
                 )
                 if st.button(
-                    "ลบรายการ",
+                    "ย้ายเข้าถังขยะ",
                     disabled=not confirm_delete,
                     use_container_width=True,
                     key=f"dialog_delete_{selected_event['id']}",
@@ -940,7 +1132,7 @@ def day_schedule_dialog(
                     try:
                         delete_event(sb, selected_event)
                         st.session_state.pop("selected_calendar_day", None)
-                        st.success("ลบรายการแล้ว")
+                        st.success("ย้ายรายการเข้าถังขยะแล้ว")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"ลบไม่สำเร็จ: {exc}")
@@ -1261,6 +1453,247 @@ def timeline_view(
                         st.error(f"อัปเดตสถานะไม่สำเร็จ: {exc}")
 
 
+def week_view(events: list[dict[str, Any]]) -> None:
+    selected = st.date_input(
+        "เลือกวันในสัปดาห์", value=date.today(), format="DD/MM/YYYY"
+    )
+    monday = selected - timedelta(days=selected.weekday())
+    st.subheader(
+        f"สัปดาห์ {monday.strftime('%d/%m/%Y')} – "
+        f"{(monday + timedelta(days=6)).strftime('%d/%m/%Y')}"
+    )
+    columns = st.columns(7)
+    day_names = ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]
+    for offset, column in enumerate(columns):
+        day = monday + timedelta(days=offset)
+        with column:
+            st.markdown(f"**{day_names[offset]} {day.day}/{day.month}**")
+            day_events = sorted(
+                [event for event in events if event_covers(event, day)],
+                key=lambda event: event.get("start_time") or "99:99:99",
+            )
+            if not day_events:
+                st.caption("—")
+            for event in day_events:
+                event_time = (
+                    event["start_time"][:5] if event.get("start_time") else ""
+                )
+                st.markdown(
+                    f"{PIN_SYMBOLS.get(event.get('pin_color'), '🔵')} "
+                    f"**{html.escape(event['title'])}**"
+                )
+                st.caption(
+                    " • ".join(
+                        value for value in [event_time, event_people_text(event)] if value
+                    )
+                )
+
+
+def alerts_view(events: list[dict[str, Any]]) -> None:
+    today = date.today()
+    open_tasks = [
+        event
+        for event in events
+        if event["item_type"] == "task" and event["status"] != "done"
+    ]
+    overdue = [
+        event for event in open_tasks if parse_date(event["end_date"]) < today
+    ]
+    due_soon = [
+        event
+        for event in open_tasks
+        if today <= parse_date(event["end_date"]) <= today + timedelta(days=3)
+    ]
+    st.subheader("แจ้งเตือนงาน")
+    if overdue:
+        st.error(f"มีงานเกินกำหนด {len(overdue)} รายการ")
+        for event in overdue:
+            late = (today - parse_date(event["end_date"])).days
+            st.markdown(f"• **{event['title']}** — เกินกำหนด {late} วัน")
+    if due_soon:
+        st.warning(f"มีงานใกล้ครบกำหนด {len(due_soon)} รายการ")
+        for event in due_soon:
+            remaining = (parse_date(event["end_date"]) - today).days
+            label = "วันนี้" if remaining == 0 else f"อีก {remaining} วัน"
+            st.markdown(f"• **{event['title']}** — {label}")
+    if not overdue and not due_soon:
+        st.success("ไม่มีงานเกินกำหนดหรืองานที่ครบกำหนดใน 3 วัน")
+
+
+def dashboard_view(
+    events: list[dict[str, Any]], members: list[dict[str, Any]]
+) -> None:
+    st.subheader("Dashboard รายบุคคล")
+    member_names = {str(member["id"]): member["name"] for member in members}
+    rows = []
+    for member in members:
+        member_id = str(member["id"])
+        created = [
+            event
+            for event in events
+            if not event.get("_builtin")
+            and str(event.get("created_by") or "") == member_id
+        ]
+        tasks = [event for event in created if event["item_type"] == "task"]
+        done = [event for event in tasks if event["status"] == "done"]
+        overdue = [
+            event
+            for event in tasks
+            if event["status"] != "done"
+            and parse_date(event["end_date"]) < date.today()
+        ]
+        rows.append(
+            {
+                "สมาชิก": member["name"],
+                "รายการที่สร้าง": len(created),
+                "งานทั้งหมด": len(tasks),
+                "เสร็จแล้ว": len(done),
+                "เกินกำหนด": len(overdue),
+                "สำเร็จ (%)": round(len(done) * 100 / len(tasks)) if tasks else 0,
+            }
+        )
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    my_id = str(actor_id())
+    my_events = [
+        event
+        for event in events
+        if str(event.get("created_by") or "") == my_id
+        and not event.get("_builtin")
+    ]
+    st.caption(
+        f"คุณ {member_names.get(my_id, actor_name())} สร้างรายการทั้งหมด "
+        f"{len(my_events)} รายการ"
+    )
+
+
+def trash_view(sb: Client, role: str) -> None:
+    deleted = load_events(sb, include_deleted=True)
+    st.subheader("ถังขยะ")
+    st.caption("สมาชิกกู้คืนงานของตัวเองได้ ผู้ดูแลจัดการได้ทุกงาน")
+    manageable = [
+        event
+        for event in deleted
+        if role == "admin"
+        or str(event.get("created_by") or "") == str(actor_id())
+    ]
+    if not manageable:
+        st.info("ไม่มีรายการในถังขยะ")
+        return
+    for event in manageable:
+        st.markdown(f"**{event['title']}** — {format_range(event)}")
+        restore_col, delete_col = st.columns(2)
+        if restore_col.button(
+            "กู้คืน", key=f"restore_{event['id']}", use_container_width=True
+        ):
+            restore_event(sb, event)
+            st.success("กู้คืนรายการแล้ว")
+            st.rerun()
+        confirm = delete_col.checkbox(
+            "ลบถาวร", key=f"confirm_permanent_{event['id']}"
+        )
+        if delete_col.button(
+            "ยืนยันลบถาวร",
+            key=f"permanent_{event['id']}",
+            disabled=not confirm,
+            use_container_width=True,
+        ):
+            permanently_delete_event(sb, event)
+            st.success("ลบถาวรแล้ว")
+            st.rerun()
+
+
+def load_leave_events(sb: Client) -> list[dict[str, Any]]:
+    requests = (
+        sb.table("leave_requests")
+        .select("*")
+        .eq("status", "approved")
+        .execute()
+        .data
+        or []
+    )
+    return [
+        {
+            "id": f"leave-{request['id']}",
+            "title": f"ลา: {request['member_name']} ({request['leave_type']})",
+            "details": request.get("reason") or "",
+            "start_date": request["start_date"],
+            "end_date": request["end_date"],
+            "start_time": None,
+            "item_type": "info",
+            "pin_color": "orange",
+            "priority": "normal",
+            "status": "not_started",
+            "people": [],
+            "_leave": True,
+        }
+        for request in requests
+    ]
+
+
+def leave_view(sb: Client, role: str) -> None:
+    st.subheader("วันลา")
+    with st.form("leave_request", clear_on_submit=True):
+        leave_type = st.selectbox(
+            "ประเภทการลา", ["ลาป่วย", "ลากิจ", "ลาพักร้อน", "อื่น ๆ"]
+        )
+        col1, col2 = st.columns(2)
+        start = col1.date_input("วันเริ่มลา", format="DD/MM/YYYY")
+        end = col2.date_input("วันสิ้นสุด", format="DD/MM/YYYY")
+        reason = st.text_area("เหตุผล / หมายเหตุ")
+        if st.form_submit_button("ส่งคำขออนุมัติ", use_container_width=True):
+            if end < start:
+                st.error("วันสิ้นสุดต้องไม่ก่อนวันเริ่มลา")
+            else:
+                sb.table("leave_requests").insert(
+                    {
+                        "member_id": actor_id(),
+                        "member_name": actor_name(),
+                        "leave_type": leave_type,
+                        "start_date": start.isoformat(),
+                        "end_date": end.isoformat(),
+                        "reason": reason.strip(),
+                    }
+                ).execute()
+                st.success("ส่งคำขอแล้ว")
+                st.rerun()
+    query = sb.table("leave_requests").select("*").order("created_at", desc=True)
+    if role != "admin":
+        query = query.eq("member_id", actor_id())
+    requests = query.execute().data or []
+    for request in requests:
+        st.markdown(
+            f"**{request['member_name']} — {request['leave_type']}**  \n"
+            f"{request['start_date']} ถึง {request['end_date']} • "
+            f"{LEAVE_STATUS_LABELS[request['status']]}"
+        )
+        if role == "admin" and request["status"] == "pending":
+            approve_col, reject_col = st.columns(2)
+            for new_status, column, label in [
+                ("approved", approve_col, "อนุมัติ"),
+                ("rejected", reject_col, "ไม่อนุมัติ"),
+            ]:
+                if column.button(
+                    label,
+                    key=f"leave_{new_status}_{request['id']}",
+                    use_container_width=True,
+                ):
+                    sb.table("leave_requests").update(
+                        {
+                            "status": new_status,
+                            "reviewed_by": actor_id(),
+                            "reviewed_by_name": actor_name(),
+                            "reviewed_at": datetime.now(BANGKOK_TZ).isoformat(),
+                        }
+                    ).eq("id", request["id"]).execute()
+                    log_action(
+                        sb,
+                        None,
+                        f"leave_{new_status}",
+                        {"member_name": request["member_name"]},
+                    )
+                    st.rerun()
+
+
 def team_view(
     sb: Client,
     people: list[dict[str, Any]],
@@ -1334,7 +1767,11 @@ def activity_view(sb: Client) -> None:
     labels = {
         "create": "เพิ่มรายการ",
         "update": "แก้ไขรายการ",
-        "delete": "ลบรายการ",
+        "delete": "ย้ายเข้าถังขยะ",
+        "restore": "กู้คืนรายการ",
+        "delete_attachment": "ลบไฟล์แนบ",
+        "leave_approved": "อนุมัติวันลา",
+        "leave_rejected": "ไม่อนุมัติวันลา",
         "status": "เปลี่ยนสถานะ",
     }
     if not logs:
@@ -1477,7 +1914,9 @@ def sidebar_editor(
         st.session_state.clear()
         st.rerun()
     st.sidebar.divider()
-    mode = st.sidebar.radio("จัดการรายการ", ["เพิ่มใหม่", "แก้ไข / ลบรายการ"])
+    mode = st.sidebar.radio(
+        "จัดการรายการ", ["เพิ่มใหม่", "แก้ไข / ย้ายเข้าถังขยะ"]
+    )
     if mode == "เพิ่มใหม่":
         with st.sidebar:
             event_form(sb, people)
@@ -1495,15 +1934,15 @@ def sidebar_editor(
     with st.sidebar:
         event_form(sb, people, event)
         st.divider()
-        confirm = st.checkbox("ยืนยันว่าต้องการลบรายการนี้")
+        confirm = st.checkbox("ยืนยันว่าต้องการย้ายรายการนี้เข้าถังขยะ")
         if st.button(
-            "ลบรายการ",
+            "ย้ายเข้าถังขยะ",
             disabled=not confirm,
             use_container_width=True,
         ):
             try:
                 delete_event(sb, event)
-                st.success("ลบรายการแล้ว")
+                st.success("ย้ายรายการเข้าถังขยะแล้ว")
                 st.rerun()
             except Exception as exc:
                 st.error(f"ลบไม่สำเร็จ: {exc}")
@@ -1538,6 +1977,13 @@ def main() -> None:
         people = load_people(sb)
         profiles = []
         events = load_events(sb)
+        events.extend(load_leave_events(sb))
+        events.sort(
+            key=lambda event: (
+                str(event["start_date"]),
+                event.get("start_time") or "",
+            )
+        )
     except Exception:
         st.session_state.clear()
         st.error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่")
@@ -1572,17 +2018,57 @@ def main() -> None:
     m3.metric("งานที่ยังไม่เสร็จ", len(open_tasks))
     m4.metric("วันหยุดเดือนนี้", len(holidays_month))
 
-    calendar_tab, timeline_tab, team_tab, activity_tab, backup_tab = st.tabs(
-        ["ปฏิทิน", "กำหนดการทั้งหมด", "ทีม", "ประวัติอัปเดต", "สำรองข้อมูล"]
+    overdue = [
+        event
+        for event in open_tasks
+        if parse_date(event["end_date"]) < today
+    ]
+    if overdue:
+        st.error(f"🔔 มีงานเกินกำหนด {len(overdue)} รายการ")
+
+    (
+        calendar_tab,
+        week_tab,
+        timeline_tab,
+        alerts_tab,
+        dashboard_tab,
+        leave_tab,
+        team_tab,
+        activity_tab,
+        trash_tab,
+        backup_tab,
+    ) = st.tabs(
+        [
+            "ปฏิทิน",
+            "รายสัปดาห์",
+            "กำหนดการทั้งหมด",
+            "แจ้งเตือน",
+            "Dashboard",
+            "วันลา",
+            "ทีม",
+            "ประวัติ",
+            "ถังขยะ",
+            "สำรองข้อมูล",
+        ]
     )
     with calendar_tab:
         calendar_view(sb, people, events)
+    with week_tab:
+        week_view(events)
     with timeline_tab:
         timeline_view(sb, events, people)
+    with alerts_tab:
+        alerts_view(events)
+    with dashboard_tab:
+        dashboard_view(events, load_members(sb))
+    with leave_tab:
+        leave_view(sb, profile.get("role", "member"))
     with team_tab:
         team_view(sb, people, profiles, profile.get("role", "member"))
     with activity_tab:
         activity_view(sb)
+    with trash_tab:
+        trash_view(sb, profile.get("role", "member"))
     with backup_tab:
         backup_view(events)
 
