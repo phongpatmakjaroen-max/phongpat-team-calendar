@@ -433,32 +433,88 @@ def get_supabase() -> Client:
 
 
 def current_user() -> Any | None:
-    return st.session_state.get("team_access_granted")
+    return st.session_state.get("member_id")
 
 
 def actor_name() -> str:
-    return st.session_state.get("display_name") or "ทีม DAILYLOOK.SM"
+    return st.session_state.get("member_name") or "ทีม DAILYLOOK.SM"
 
 
-def actor_id() -> None:
-    """Shared-code mode has no Supabase Auth user UUID."""
-    return None
+def actor_id() -> str | None:
+    return st.session_state.get("member_id")
 
 
 def login_screen(sb: Client) -> None:
     st.markdown('<div class="brand-kicker">DAILYLOOK.SM</div>', unsafe_allow_html=True)
     st.title("ปฏิทินงานทีม")
-    st.subheader("กรอกรหัสทีมเพื่อเข้าใช้งาน")
-    st.caption("สมาชิกไม่ต้องกรอกอีเมลหรือสร้างบัญชีแยก")
-    with st.form("team_code_login"):
-        access_code = st.text_input("รหัสเข้าใช้งาน", type="password")
+    if not st.session_state.get("team_access_granted"):
+        st.subheader("กรอกรหัสทีมเพื่อเข้าใช้งาน")
+        with st.form("team_code_login"):
+            access_code = st.text_input("รหัสเข้าใช้งาน", type="password")
+            if st.form_submit_button("ถัดไป", use_container_width=True):
+                expected = secret("TEAM_ACCESS_CODE") or secret("TEAM_SECRET_KEY") or ""
+                if not hmac.compare_digest(access_code.strip(), expected):
+                    st.error("รหัสเข้าใช้งานไม่ถูกต้อง")
+                    return
+                st.session_state.team_access_granted = True
+                st.rerun()
+        return
+
+    members = load_members(sb)
+    if not members:
+        st.subheader("สร้างผู้ดูแลคนแรก")
+        st.caption("ตั้งชื่อและ PIN 4–8 หลักสำหรับแยกประวัติของแต่ละคน")
+        with st.form("first_admin"):
+            name = st.text_input("ชื่อที่แสดง")
+            pin = st.text_input("PIN ส่วนตัว", type="password", max_chars=8)
+            confirm_pin = st.text_input("ยืนยัน PIN", type="password", max_chars=8)
+            if st.form_submit_button("สร้างผู้ดูแล", use_container_width=True):
+                if not name.strip():
+                    st.error("กรุณาใส่ชื่อ")
+                elif not pin.isdigit() or not 4 <= len(pin) <= 8:
+                    st.error("PIN ต้องเป็นตัวเลข 4–8 หลัก")
+                elif pin != confirm_pin:
+                    st.error("PIN ทั้งสองช่องไม่ตรงกัน")
+                else:
+                    result = sb.rpc(
+                        "create_team_member",
+                        {"member_name": name.strip(), "member_pin": pin, "member_role": "admin"},
+                    ).execute()
+                    member = (result.data or [None])[0]
+                    if not member:
+                        st.error("สร้างผู้ดูแลไม่สำเร็จ กรุณารันไฟล์ SQL ของ v10 ก่อน")
+                    else:
+                        set_member_session(member)
+                        st.rerun()
+        return
+
+    st.subheader("เลือกชื่อและกรอก PIN")
+    member_by_name = {member["name"]: member for member in members}
+    with st.form("member_pin_login"):
+        selected_name = st.selectbox("ชื่อผู้ใช้งาน", list(member_by_name))
+        pin = st.text_input("PIN ส่วนตัว", type="password", max_chars=8)
         if st.form_submit_button("เข้าใช้งาน", use_container_width=True):
-            expected = secret("TEAM_ACCESS_CODE") or secret("TEAM_SECRET_KEY") or ""
-            if not hmac.compare_digest(access_code.strip(), expected):
-                st.error("รหัสเข้าใช้งานไม่ถูกต้อง")
+            result = sb.rpc(
+                "verify_team_member_pin",
+                {"member_id": member_by_name[selected_name]["id"], "member_pin": pin},
+            ).execute()
+            member = (result.data or [None])[0]
+            if not member:
+                st.error("PIN ไม่ถูกต้อง")
                 return
-            st.session_state.team_access_granted = True
+            set_member_session(member)
             st.rerun()
+
+
+def set_member_session(member: dict[str, Any]) -> None:
+    st.session_state.member_id = member["id"]
+    st.session_state.member_name = member["name"]
+    st.session_state.member_role = member.get("role", "member")
+
+
+def load_members(sb: Client) -> list[dict[str, Any]]:
+    result = sb.rpc("list_team_members").execute()
+    return result.data or []
 
 
 def load_profile(sb: Client, user_id: str) -> dict[str, Any]:
@@ -508,7 +564,64 @@ def load_events(sb: Client) -> list[dict[str, Any]]:
             for link in event.get("event_people", [])
             if link.get("people")
         ]
-    return events
+    return merge_builtin_thai_holidays(events)
+
+
+THAI_HOLIDAYS_2026 = [
+    ("วันขึ้นปีใหม่", "2026-01-01"),
+    ("วันหยุดพิเศษช่วงปีใหม่", "2026-01-02"),
+    ("วันมาฆบูชา", "2026-03-03"),
+    ("วันจักรี", "2026-04-06"),
+    ("วันสงกรานต์", "2026-04-13"),
+    ("วันสงกรานต์", "2026-04-14"),
+    ("วันสงกรานต์", "2026-04-15"),
+    ("วันแรงงานแห่งชาติ", "2026-05-01"),
+    ("วันฉัตรมงคล", "2026-05-04"),
+    ("วันวิสาขบูชา", "2026-05-31"),
+    ("วันหยุดชดเชยวันวิสาขบูชา", "2026-06-01"),
+    ("วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าฯ พระบรมราชินี", "2026-06-03"),
+    ("วันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระเจ้าอยู่หัว", "2026-07-28"),
+    ("วันอาสาฬหบูชา", "2026-07-29"),
+    ("วันเข้าพรรษา", "2026-07-30"),
+    ("วันแม่แห่งชาติ", "2026-08-12"),
+    ("วันนวมินทรมหาราช", "2026-10-13"),
+    ("วันหยุดพิเศษในพื้นที่กรุงเทพมหานคร", "2026-10-16"),
+    ("วันปิยมหาราช", "2026-10-23"),
+    ("วันพ่อแห่งชาติ", "2026-12-05"),
+    ("วันหยุดชดเชยวันพ่อแห่งชาติ", "2026-12-07"),
+    ("วันรัฐธรรมนูญ", "2026-12-10"),
+    ("วันสิ้นปี", "2026-12-31"),
+]
+
+
+def merge_builtin_thai_holidays(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing = {
+        (event.get("title"), str(event.get("start_date")))
+        for event in events
+        if event.get("item_type") == "holiday"
+    }
+    merged = list(events)
+    for title, holiday_date in THAI_HOLIDAYS_2026:
+        if (title, holiday_date) in existing:
+            continue
+        merged.append(
+            {
+                "id": f"builtin-holiday-{holiday_date}-{title}",
+                "title": title,
+                "details": "วันหยุดตามปฏิทินไทย",
+                "start_date": holiday_date,
+                "end_date": holiday_date,
+                "start_time": None,
+                "item_type": "holiday",
+                "pin_color": "blue",
+                "priority": "normal",
+                "status": "not_started",
+                "people": [],
+                "_builtin": True,
+            }
+        )
+    merged.sort(key=lambda event: (str(event["start_date"]), event.get("start_time") or ""))
+    return merged
 
 
 def parse_date(value: str | date) -> date:
@@ -766,26 +879,30 @@ def day_schedule_dialog(
                 unsafe_allow_html=True,
             )
 
-        with st.expander("แก้ไขรายการของวันนี้"):
-            event_by_label = {
+        editable_day_events = [
+            event for event in day_events if not event.get("_builtin")
+        ]
+        if editable_day_events:
+            with st.expander("แก้ไขรายการของวันนี้"):
+                event_by_label = {
                 (
                     f"{(event.get('start_time') or '')[:5] or 'ไม่ระบุเวลา'} | "
                     f"{event['title']}"
                 ): event
-                for event in day_events
-            }
-            selected_label = st.selectbox(
+                    for event in editable_day_events
+                }
+                selected_label = st.selectbox(
                 "เลือกรายการที่ต้องการแก้ไข",
                 list(event_by_label),
                 key=f"dialog_event_{selected_day.isoformat()}",
-            )
-            selected_event = event_by_label[selected_label]
-            event_form(
-                sb,
-                people,
-                selected_event,
-                form_key=f"dialog_event_form_{selected_event['id']}",
-            )
+                )
+                selected_event = event_by_label[selected_label]
+                event_form(
+                    sb,
+                    people,
+                    selected_event,
+                    form_key=f"dialog_event_form_{selected_event['id']}",
+                )
 
     if st.button("ปิด", use_container_width=True, key="close_day_dialog"):
         st.session_state.pop("selected_calendar_day", None)
@@ -1108,7 +1225,41 @@ def team_view(
     profiles: list[dict[str, Any]],
     role: str,
 ) -> None:
-    st.subheader("ทีมและผู้เกี่ยวข้อง")
+    st.subheader("สมาชิกที่เข้าใช้งาน")
+    members = load_members(sb)
+    if role == "admin":
+        with st.form("add_team_member", clear_on_submit=True):
+            member_name = st.text_input("ชื่อสมาชิก")
+            member_pin = st.text_input("PIN เริ่มต้น 4–8 หลัก", type="password")
+            member_role = st.selectbox(
+                "สิทธิ์",
+                ["member", "admin"],
+                format_func=lambda value: (
+                    "สมาชิก" if value == "member" else "ผู้ดูแล"
+                ),
+            )
+            if st.form_submit_button("เพิ่มสมาชิก", use_container_width=True):
+                try:
+                    sb.rpc(
+                        "create_team_member",
+                        {
+                            "member_name": member_name.strip(),
+                            "member_pin": member_pin,
+                            "member_role": member_role,
+                        },
+                    ).execute()
+                    st.success("เพิ่มสมาชิกแล้ว")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"เพิ่มสมาชิกไม่สำเร็จ: {exc}")
+    for member in members:
+        st.markdown(
+            f"• **{html.escape(member['name'])}** — "
+            f"{'ผู้ดูแล' if member['role'] == 'admin' else 'สมาชิก'}"
+        )
+
+    st.divider()
+    st.subheader("ผู้รับผิดชอบ / ผู้เกี่ยวข้อง")
     with st.form("add_person", clear_on_submit=True):
         name = st.text_input("เพิ่มชื่อคนในแผนกหรือผู้เกี่ยวข้อง")
         if st.form_submit_button("เพิ่มรายชื่อ"):
@@ -1126,53 +1277,6 @@ def team_view(
             st.markdown(f"• {person['name']}")
     else:
         st.info("ยังไม่มีรายชื่อผู้เกี่ยวข้อง")
-    st.divider()
-    st.subheader("บัญชีที่เข้าใช้งาน")
-    for profile in profiles:
-        name = profile.get("display_name") or "ยังไม่ได้ตั้งชื่อ"
-        current_role = profile.get("role", "member")
-        approved = profile.get("approved", False)
-        c1, c2, c3 = st.columns([3, 1, 1])
-        c1.markdown(
-            f"**{html.escape(name)}**  \n"
-            f"{'ผู้ดูแล' if current_role == 'admin' else 'สมาชิก'}"
-            f" • {'อนุมัติแล้ว' if approved else 'รออนุมัติ'}"
-        )
-        if role == "admin":
-            new_role = c2.selectbox(
-                "สิทธิ์",
-                ["member", "admin"],
-                index=1 if current_role == "admin" else 0,
-                format_func=lambda value: "ผู้ดูแล" if value == "admin" else "สมาชิก",
-                key=f"role_{profile['id']}",
-                label_visibility="collapsed",
-            )
-            if new_role != current_role:
-                try:
-                    sb.table("profiles").update({"role": new_role}).eq(
-                        "id", profile["id"]
-                    ).execute()
-                    st.success(f"ปรับสิทธิ์ของ {name} แล้ว")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"ปรับสิทธิ์ไม่สำเร็จ: {exc}")
-            new_approval = c3.selectbox(
-                "การอนุมัติ",
-                [False, True],
-                index=1 if approved else 0,
-                format_func=lambda value: "อนุมัติ" if value else "รออนุมัติ",
-                key=f"approved_{profile['id']}",
-                label_visibility="collapsed",
-            )
-            if new_approval != approved:
-                try:
-                    sb.table("profiles").update({"approved": new_approval}).eq(
-                        "id", profile["id"]
-                    ).execute()
-                    st.success(f"อัปเดตการอนุมัติของ {name} แล้ว")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"ปรับการอนุมัติไม่สำเร็จ: {exc}")
 
 
 def activity_view(sb: Client) -> None:
@@ -1309,21 +1413,24 @@ def sidebar_editor(
     )
     st.sidebar.markdown(f"### สวัสดี {actor_name()}")
     st.sidebar.caption("ผู้ดูแล" if role == "admin" else "สมาชิก")
-    with st.sidebar.expander("โปรไฟล์ของฉัน"):
-        with st.form("profile_form"):
-            display_name = st.text_input(
-                "ชื่อที่แสดง",
-                value=actor_name(),
-                max_chars=60,
-            )
-            if st.form_submit_button("บันทึกชื่อ", use_container_width=True):
-                clean_name = display_name.strip()
-                if not clean_name:
-                    st.error("กรุณาใส่ชื่อที่ต้องการแสดง")
+    with st.sidebar.expander("เปลี่ยน PIN ของฉัน"):
+        with st.form("change_my_pin"):
+            new_pin = st.text_input("PIN ใหม่ 4–8 หลัก", type="password")
+            confirm_pin = st.text_input("ยืนยัน PIN ใหม่", type="password")
+            if st.form_submit_button("บันทึก PIN", use_container_width=True):
+                if not new_pin.isdigit() or not 4 <= len(new_pin) <= 8:
+                    st.error("PIN ต้องเป็นตัวเลข 4–8 หลัก")
+                elif new_pin != confirm_pin:
+                    st.error("PIN ทั้งสองช่องไม่ตรงกัน")
                 else:
-                    st.session_state.display_name = clean_name
-                    st.success("บันทึกชื่อแล้ว")
-                    st.rerun()
+                    try:
+                        sb.rpc(
+                            "change_team_member_pin",
+                            {"member_id": actor_id(), "new_pin": new_pin},
+                        ).execute()
+                        st.success("เปลี่ยน PIN แล้ว")
+                    except Exception as exc:
+                        st.error(f"เปลี่ยน PIN ไม่สำเร็จ: {exc}")
     if st.sidebar.button("ออกจากระบบ", use_container_width=True):
         st.session_state.clear()
         st.rerun()
@@ -1334,7 +1441,9 @@ def sidebar_editor(
             event_form(sb, people)
         return
     editable = {
-        f"{event['title']} | {format_range(event)}": event for event in events
+        f"{event['title']} | {format_range(event)}": event
+        for event in events
+        if not event.get("_builtin")
     }
     if not editable:
         st.sidebar.info("ยังไม่มีรายการให้แก้ไข")
@@ -1383,7 +1492,7 @@ def main() -> None:
     try:
         profile = {
             "display_name": actor_name(),
-            "role": "admin",
+            "role": st.session_state.get("member_role", "member"),
             "approved": True,
         }
         people = load_people(sb)
