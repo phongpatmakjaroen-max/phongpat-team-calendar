@@ -693,6 +693,28 @@ def upsert_event_people(
         ).execute()
 
 
+def can_manage_event(event: dict[str, Any], role: str) -> bool:
+    """Admins manage every saved event; members manage only their own."""
+    if event.get("_builtin"):
+        return False
+    return role == "admin" or str(event.get("created_by") or "") == str(actor_id())
+
+
+def delete_event(sb: Client, event: dict[str, Any]) -> None:
+    """Audit first, then delete the selected event and its linked people."""
+    log_action(
+        sb,
+        event["id"],
+        "delete",
+        {
+            "title": event["title"],
+            "created_by": event.get("created_by"),
+        },
+    )
+    sb.table("event_people").delete().eq("event_id", event["id"]).execute()
+    sb.table("events").delete().eq("id", event["id"]).execute()
+
+
 def event_form(
     sb: Client,
     people: list[dict[str, Any]],
@@ -829,6 +851,7 @@ def day_schedule_dialog(
     people: list[dict[str, Any]],
     events: list[dict[str, Any]],
     selected_day: date,
+    role: str,
 ) -> None:
     day_events = [event for event in events if event_covers(event, selected_day)]
     day_events.sort(
@@ -880,10 +903,10 @@ def day_schedule_dialog(
             )
 
         editable_day_events = [
-            event for event in day_events if not event.get("_builtin")
+            event for event in day_events if can_manage_event(event, role)
         ]
         if editable_day_events:
-            with st.expander("แก้ไขรายการของวันนี้"):
+            with st.expander("แก้ไขหรือลบรายการของวันนี้"):
                 event_by_label = {
                 (
                     f"{(event.get('start_time') or '')[:5] or 'ไม่ระบุเวลา'} | "
@@ -903,6 +926,24 @@ def day_schedule_dialog(
                     selected_event,
                     form_key=f"dialog_event_form_{selected_event['id']}",
                 )
+                st.divider()
+                confirm_delete = st.checkbox(
+                    "ยืนยันว่าต้องการลบรายการนี้",
+                    key=f"dialog_confirm_delete_{selected_event['id']}",
+                )
+                if st.button(
+                    "ลบรายการ",
+                    disabled=not confirm_delete,
+                    use_container_width=True,
+                    key=f"dialog_delete_{selected_event['id']}",
+                ):
+                    try:
+                        delete_event(sb, selected_event)
+                        st.session_state.pop("selected_calendar_day", None)
+                        st.success("ลบรายการแล้ว")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"ลบไม่สำเร็จ: {exc}")
 
     if st.button("ปิด", use_container_width=True, key="close_day_dialog"):
         st.session_state.pop("selected_calendar_day", None)
@@ -1095,6 +1136,7 @@ def calendar_view(
                 people,
                 events,
                 date.fromisoformat(str(selected_day_value)),
+                st.session_state.get("member_role", "member"),
             )
         except ValueError:
             st.session_state.pop("selected_calendar_day", None)
@@ -1435,7 +1477,7 @@ def sidebar_editor(
         st.session_state.clear()
         st.rerun()
     st.sidebar.divider()
-    mode = st.sidebar.radio("จัดการรายการ", ["เพิ่มใหม่", "แก้ไขรายการ"])
+    mode = st.sidebar.radio("จัดการรายการ", ["เพิ่มใหม่", "แก้ไข / ลบรายการ"])
     if mode == "เพิ่มใหม่":
         with st.sidebar:
             event_form(sb, people)
@@ -1443,30 +1485,28 @@ def sidebar_editor(
     editable = {
         f"{event['title']} | {format_range(event)}": event
         for event in events
-        if not event.get("_builtin")
+        if can_manage_event(event, role)
     }
     if not editable:
-        st.sidebar.info("ยังไม่มีรายการให้แก้ไข")
+        st.sidebar.info("ยังไม่มีรายการที่คุณแก้ไขหรือลบได้")
         return
     selected = st.sidebar.selectbox("เลือกรายการ", list(editable))
     event = editable[selected]
     with st.sidebar:
         event_form(sb, people, event)
-        if role == "admin":
-            st.divider()
-            confirm = st.checkbox("ยืนยันว่าต้องการลบรายการนี้")
-            if st.button(
-                "ลบรายการ",
-                disabled=not confirm,
-                use_container_width=True,
-            ):
-                try:
-                    log_action(sb, event["id"], "delete", {"title": event["title"]})
-                    sb.table("events").delete().eq("id", event["id"]).execute()
-                    st.success("ลบรายการแล้ว")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"ลบไม่สำเร็จ: {exc}")
+        st.divider()
+        confirm = st.checkbox("ยืนยันว่าต้องการลบรายการนี้")
+        if st.button(
+            "ลบรายการ",
+            disabled=not confirm,
+            use_container_width=True,
+        ):
+            try:
+                delete_event(sb, event)
+                st.success("ลบรายการแล้ว")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"ลบไม่สำเร็จ: {exc}")
 
 
 def main() -> None:
