@@ -112,6 +112,28 @@ def inject_css() -> None:
             margin-bottom: 10px;
             overflow: hidden;
         }
+        .calendar-scroll {
+            width: 100%;
+            overflow-x: auto;
+            padding: 2px 2px 8px;
+            margin-bottom: 8px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(112px, 1fr));
+            gap: 8px;
+            min-width: 820px;
+        }
+        .calendar-weekday {
+            color: var(--brown);
+            font-weight: 700;
+            text-align: center;
+            padding: 7px 3px;
+            background: #edf4f5;
+            border: 1px solid #d7e3e5;
+            border-radius: 10px;
+        }
         .calendar-cell.today { border: 2px solid #9bb9c2; background: var(--blue-soft); }
         .calendar-cell.outside { opacity: .44; }
         .day-number { font-weight: 700; font-size: 1.1rem; margin-bottom: 7px; }
@@ -251,8 +273,19 @@ def inject_css() -> None:
         }
         @media (max-width: 700px) {
             .block-container { padding: 1rem .7rem; }
-            .calendar-cell { min-height: 105px; padding: 7px; }
+            .calendar-scroll {
+                margin-left: -.25rem;
+                width: calc(100% + .5rem);
+                border-radius: 12px;
+            }
+            .calendar-grid {
+                grid-template-columns: repeat(7, 112px);
+                gap: 6px;
+                min-width: 820px;
+            }
+            .calendar-cell { min-height: 112px; padding: 7px; margin-bottom: 0; }
             .event-chip { font-size: .68rem; padding: 4px; }
+            .month-title { font-size: 1.1rem; padding-top: .35rem; }
         }
         </style>
         """,
@@ -710,15 +743,14 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
                 st.session_state.calendar_month = number
                 st.rerun()
 
-    header_cols = st.columns(7)
-    for col, label in zip(
-        header_cols, ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]
-    ):
-        col.markdown(f"**{label}**")
+    calendar_parts = ['<div class="calendar-scroll"><div class="calendar-grid">']
+    for label in ["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."]:
+        calendar_parts.append(
+            f'<div class="calendar-weekday">{label}</div>'
+        )
     cal = calendar.Calendar(firstweekday=0)
     for week in cal.monthdatescalendar(int(year), month):
-        cols = st.columns(7)
-        for col, day in zip(cols, week):
+        for day in week:
             day_events = [event for event in events if event_covers(event, day)]
             chips = []
             for event in day_events[:3]:
@@ -750,12 +782,13 @@ def calendar_view(events: list[dict[str, Any]]) -> None:
                 classes.append("today")
             if day.month != month:
                 classes.append("outside")
-            col.markdown(
+            calendar_parts.append(
                 f'<div class="{" ".join(classes)}">'
                 f'<div class="day-number">{day.day}</div>'
-                f'{"".join(chips)}</div>',
-                unsafe_allow_html=True,
+                f'{"".join(chips)}</div>'
             )
+    calendar_parts.append("</div></div>")
+    st.markdown("".join(calendar_parts), unsafe_allow_html=True)
     monthly_agenda_view(events, year, month)
 
 
