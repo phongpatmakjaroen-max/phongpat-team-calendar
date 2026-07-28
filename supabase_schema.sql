@@ -1,40 +1,74 @@
--- DAILYLOOK.SM shared access-code mode
--- Run once in Supabase SQL Editor after supabase_schema.sql.
+-- DAILYLOOK.SM — เติมวันหยุดไทย พ.ศ. 2569 (ค.ศ. 2026)
+-- รันใน Supabase SQL Editor ของโปรเจกต์ที่แอปใช้อยู่
+-- ไฟล์นี้ไม่ลบหรือแก้กำหนดการเดิม และรันซ้ำได้โดยไม่สร้างรายการซ้ำ
 
-alter table public.events alter column created_by drop not null;
-alter table public.events alter column updated_by drop not null;
-alter table public.people alter column created_by drop not null;
-alter table public.audit_logs alter column actor_id drop not null;
+begin;
 
-grant usage on schema public to anon;
-grant select, insert, update, delete on table
-  public.events,
-  public.event_people,
-  public.people,
-  public.audit_logs
-to anon;
+with thai_holidays(title, holiday_date, details) as (
+  values
+    ('วันขึ้นปีใหม่', date '2026-01-01', 'วันหยุดตามปฏิทินไทย'),
+    ('วันหยุดพิเศษช่วงปีใหม่', date '2026-01-02', 'วันหยุดพิเศษประจำปี 2569'),
+    ('วันมาฆบูชา', date '2026-03-03', 'วันหยุดตามปฏิทินไทย'),
+    ('วันจักรี', date '2026-04-06', 'วันหยุดตามปฏิทินไทย'),
+    ('วันสงกรานต์', date '2026-04-13', 'วันหยุดตามปฏิทินไทย'),
+    ('วันสงกรานต์', date '2026-04-14', 'วันหยุดตามปฏิทินไทย'),
+    ('วันสงกรานต์', date '2026-04-15', 'วันหยุดตามปฏิทินไทย'),
+    ('วันแรงงานแห่งชาติ', date '2026-05-01', 'วันหยุดตามปฏิทินไทย'),
+    ('วันฉัตรมงคล', date '2026-05-04', 'วันหยุดตามปฏิทินไทย'),
+    ('วันวิสาขบูชา', date '2026-05-31', 'วันหยุดตามปฏิทินไทย'),
+    ('วันหยุดชดเชยวันวิสาขบูชา', date '2026-06-01', 'วันหยุดชดเชย'),
+    ('วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าฯ พระบรมราชินี', date '2026-06-03', 'วันหยุดตามปฏิทินไทย'),
+    ('วันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระเจ้าอยู่หัว', date '2026-07-28', 'วันหยุดตามปฏิทินไทย'),
+    ('วันอาสาฬหบูชา', date '2026-07-29', 'วันหยุดตามปฏิทินไทย'),
+    ('วันเข้าพรรษา', date '2026-07-30', 'วันหยุดราชการ'),
+    ('วันแม่แห่งชาติ', date '2026-08-12', 'วันเฉลิมพระชนมพรรษาสมเด็จพระบรมราชชนนีพันปีหลวง'),
+    ('วันนวมินทรมหาราช', date '2026-10-13', 'วันหยุดตามปฏิทินไทย'),
+    ('วันหยุดพิเศษในพื้นที่กรุงเทพมหานคร', date '2026-10-16', 'วันหยุดราชการเป็นกรณีพิเศษเฉพาะพื้นที่กรุงเทพมหานคร'),
+    ('วันปิยมหาราช', date '2026-10-23', 'วันหยุดตามปฏิทินไทย'),
+    ('วันพ่อแห่งชาติ', date '2026-12-05', 'วันคล้ายวันพระบรมราชสมภพรัชกาลที่ 9'),
+    ('วันหยุดชดเชยวันพ่อแห่งชาติ', date '2026-12-07', 'วันหยุดชดเชย'),
+    ('วันรัฐธรรมนูญ', date '2026-12-10', 'วันหยุดตามปฏิทินไทย'),
+    ('วันสิ้นปี', date '2026-12-31', 'วันหยุดตามปฏิทินไทย')
+)
+insert into public.events (
+  title,
+  details,
+  start_date,
+  end_date,
+  start_time,
+  item_type,
+  pin_color,
+  priority,
+  status,
+  created_by,
+  updated_by
+)
+select
+  h.title,
+  h.details,
+  h.holiday_date,
+  h.holiday_date,
+  null,
+  'holiday',
+  'blue',
+  'normal',
+  'not_started',
+  null,
+  null
+from thai_holidays h
+where not exists (
+  select 1
+  from public.events e
+  where e.item_type = 'holiday'
+    and e.start_date = h.holiday_date
+    and e.title = h.title
+);
 
-alter table public.events enable row level security;
-alter table public.event_people enable row level security;
-alter table public.people enable row level security;
-alter table public.audit_logs enable row level security;
+commit;
 
-drop policy if exists "team_code_events" on public.events;
-create policy "team_code_events"
-on public.events for all to anon
-using (true) with check (true);
-
-drop policy if exists "team_code_event_people" on public.event_people;
-create policy "team_code_event_people"
-on public.event_people for all to anon
-using (true) with check (true);
-
-drop policy if exists "team_code_people" on public.people;
-create policy "team_code_people"
-on public.people for all to anon
-using (true) with check (true);
-
-drop policy if exists "team_code_audit_logs" on public.audit_logs;
-create policy "team_code_audit_logs"
-on public.audit_logs for all to anon
-using (true) with check (true);
+-- ตรวจผลหลังรัน
+select title, start_date, details
+from public.events
+where item_type = 'holiday'
+  and start_date between date '2026-01-01' and date '2026-12-31'
+order by start_date, title;
