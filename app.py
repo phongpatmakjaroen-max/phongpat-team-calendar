@@ -418,8 +418,6 @@ def supabase_ready() -> bool:
         secret("SUPABASE_URL")
         and secret("SUPABASE_ANON_KEY")
         and (secret("TEAM_ACCESS_CODE") or secret("TEAM_SECRET_KEY"))
-        and secret("TEAM_LOGIN_EMAIL")
-        and secret("TEAM_LOGIN_PASSWORD")
     )
 
 
@@ -435,11 +433,16 @@ def get_supabase() -> Client:
 
 
 def current_user() -> Any | None:
-    return st.session_state.get("user")
+    return st.session_state.get("team_access_granted")
 
 
 def actor_name() -> str:
-    return st.session_state.get("display_name") or current_user().email.split("@")[0]
+    return st.session_state.get("display_name") or "ทีม DAILYLOOK.SM"
+
+
+def actor_id() -> None:
+    """Shared-code mode has no Supabase Auth user UUID."""
+    return None
 
 
 def login_screen(sb: Client) -> None:
@@ -454,18 +457,8 @@ def login_screen(sb: Client) -> None:
             if not hmac.compare_digest(access_code.strip(), expected):
                 st.error("รหัสเข้าใช้งานไม่ถูกต้อง")
                 return
-            try:
-                result = sb.auth.sign_in_with_password(
-                    {
-                        "email": secret("TEAM_LOGIN_EMAIL").strip(),
-                        "password": secret("TEAM_LOGIN_PASSWORD"),
-                    }
-                )
-                st.session_state.user = result.user
-                st.session_state.access_token = result.session.access_token
-                st.rerun()
-            except Exception:
-                st.error("เชื่อมต่อบัญชีทีมไม่สำเร็จ กรุณาตรวจ Streamlit Secrets")
+            st.session_state.team_access_granted = True
+            st.rerun()
 
 
 def load_profile(sb: Client, user_id: str) -> dict[str, Any]:
@@ -553,7 +546,7 @@ def log_action(
         {
             "event_id": event_id,
             "action": action,
-            "actor_id": current_user().id,
+            "actor_id": actor_id(),
             "actor_name": actor_name(),
             "changes": changes,
         }
@@ -567,7 +560,7 @@ def update_task_status(sb: Client, event: dict[str, Any], new_status: str) -> No
     if new_status == old_status:
         return
     sb.table("events").update(
-        {"status": new_status, "updated_by": current_user().id}
+        {"status": new_status, "updated_by": actor_id()}
     ).eq("id", event["id"]).execute()
     log_action(
         sb,
@@ -688,7 +681,7 @@ def event_form(
                 "pin_color": pin_color,
                 "priority": priority if item_type == "task" else "normal",
                 "status": status if item_type == "task" else "not_started",
-                "updated_by": current_user().id,
+                "updated_by": actor_id(),
             }
             try:
                 if editing:
@@ -701,7 +694,7 @@ def event_form(
                     event_id = event["id"]
                     action = "update"
                 else:
-                    payload["created_by"] = current_user().id
+                    payload["created_by"] = actor_id()
                     result = sb.table("events").insert(payload).execute()
                     event_id = result.data[0]["id"]
                     action = "create"
@@ -1122,7 +1115,7 @@ def team_view(
             if name.strip():
                 try:
                     sb.table("people").insert(
-                        {"name": name.strip(), "created_by": current_user().id}
+                        {"name": name.strip(), "created_by": actor_id()}
                     ).execute()
                     st.success("เพิ่มรายชื่อแล้ว")
                     st.rerun()
@@ -1145,7 +1138,7 @@ def team_view(
             f"{'ผู้ดูแล' if current_role == 'admin' else 'สมาชิก'}"
             f" • {'อนุมัติแล้ว' if approved else 'รออนุมัติ'}"
         )
-        if role == "admin" and profile["id"] != current_user().id:
+        if role == "admin":
             new_role = c2.selectbox(
                 "สิทธิ์",
                 ["member", "admin"],
@@ -1328,17 +1321,10 @@ def sidebar_editor(
                 if not clean_name:
                     st.error("กรุณาใส่ชื่อที่ต้องการแสดง")
                 else:
-                    try:
-                        sb.table("profiles").update(
-                            {"display_name": clean_name}
-                        ).eq("id", current_user().id).execute()
-                        st.session_state.display_name = clean_name
-                        st.success("บันทึกชื่อแล้ว")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"บันทึกชื่อไม่สำเร็จ: {exc}")
+                    st.session_state.display_name = clean_name
+                    st.success("บันทึกชื่อแล้ว")
+                    st.rerun()
     if st.sidebar.button("ออกจากระบบ", use_container_width=True):
-        sb.auth.sign_out()
         st.session_state.clear()
         st.rerun()
     st.sidebar.divider()
@@ -1385,8 +1371,8 @@ def main() -> None:
 
             1. สร้าง Supabase Project
             2. รัน `supabase_schema.sql` และ `seed_2026.sql` ใน SQL Editor
-            3. เพิ่ม `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TEAM_ACCESS_CODE`,
-               `TEAM_LOGIN_EMAIL` และ `TEAM_LOGIN_PASSWORD` ใน Streamlit Secrets
+            3. เพิ่ม `SUPABASE_URL`, `SUPABASE_ANON_KEY` และ
+               `TEAM_ACCESS_CODE` ใน Streamlit Secrets
             """
         )
         return
@@ -1395,21 +1381,13 @@ def main() -> None:
         login_screen(sb)
         return
     try:
-        profile = load_profile(sb, current_user().id)
-        st.session_state.display_name = profile.get("display_name") or actor_name()
-        if not profile.get("approved", False):
-            st.title("รอผู้ดูแลอนุมัติบัญชี")
-            st.info(
-                "บัญชีถูกสร้างแล้ว แต่ยังเปิดดูข้อมูลปฏิทินไม่ได้ "
-                "กรุณาให้ผู้ดูแลอนุมัติจากหน้า “ทีม”"
-            )
-            if st.button("ออกจากระบบ"):
-                sb.auth.sign_out()
-                st.session_state.clear()
-                st.rerun()
-            return
+        profile = {
+            "display_name": actor_name(),
+            "role": "admin",
+            "approved": True,
+        }
         people = load_people(sb)
-        profiles = load_profiles(sb)
+        profiles = []
         events = load_events(sb)
     except Exception:
         st.session_state.clear()
